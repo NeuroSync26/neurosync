@@ -38,7 +38,7 @@ flowchart LR
   P -.-> GM
   C -.-> GM
   L -.-> N[("OSM Nominatim")]
-  PB --> DB[("Supabase Postgres<br/>app_docs")]
+  PB --> DB[("Supabase Postgres<br/>citizens · authorities · reports · notices")]
   PB --> ST[("Supabase Storage<br/>report-photos")]
   A["Authority browser<br/>after-photo + GPS"] -->|resolve| V["verifyResolution<br/>before vs after + distance"]
   V -.-> GM
@@ -68,25 +68,23 @@ Without `SUPABASE_*` the app stores data in `./data` (development only). Without
 | `SUPABASE_BUCKET` | no | default `report-photos` (public bucket) |
 | `NOMINATIM_USER_AGENT` | recommended | identifies the app to Nominatim |
 | `DEPARTMENTS_JSON` | no | official department names + source URLs |
+| `GEMINI_THINKING_LEVEL` | no | e.g. `low` for faster Gemini 3 responses |
 
 ### Supabase setup
-In the SQL editor:
-```sql
-create table if not exists app_docs (
-  id text primary key,
-  kind text not null,
-  data jsonb not null,
-  updated_at timestamptz not null default now()
-);
-alter table app_docs enable row level security;
-```
-Then create a **public** Storage bucket named `report-photos`. Only the server (service role) reads and writes the table.
+1. Open **SQL Editor**, paste the contents of [`supabase.sql`](supabase.sql) and run it. It creates four tables that are readable in the **Table Editor**:
+   - `citizens`: id, phone, email, state, district, city, locality, strikes
+   - `authorities`: id, office, level, department, state, district, city, phone, email
+   - `reports`: id, status, category, severity, caption, address, lat/lng, department, SLA, AI confidence and reasoning, closure claims, verdict, photo URLs, reporter
+   - `notices`: id, kind, status, message, report
+   Each row also keeps the full record in a `data` column; the other columns are generated from it by Postgres. The script copies any rows from the older `app_docs` table, removes only the unused setup table, and is safe to run again.
+2. Create a **public** Storage bucket named `report-photos`.
+3. Only the server (service role key) can read or write the tables (row level security is on, no public policies).
 
 ## Deploy on Render
 1. New → Web Service → connect `NeuroSync26/neurosync`, branch `feature/civic-triage` (or `main` after merging).
 2. Root Directory: `civic-triage` · Runtime: Node · Build Command: `npm install` · Start Command: `node server.js` · Instance: Free.
 3. Add the environment variables above, then deploy.
-4. Check `https://<your-app>.onrender.com/api/health` shows `"storage":"supabase","ai":true`.
+4. Check `https://<your-app>.onrender.com/api/health` shows `"storage":"supabase","ai":true`. If storage is `local`, the Supabase variables are missing; if the service keeps restarting, check the logs (usually `supabase.sql` has not been run).
 5. The free tier sleeps when idle: open `/api/health` a minute before a demo.
 
 ## Data sources
@@ -96,4 +94,4 @@ Then create a **public** Storage bucket named `report-photos`. Only the server (
 - **OpenStreetMap tiles via Leaflet** for maps.
 - **Supabase:** Postgres and Storage.
 - `hierarchy.js`: names of Indian states/UTs, major districts and some localities, used only for choosing a user's area and for dashboard grouping. It is not used for any report location or statistic.
-- **Departments:** generic function labels marked "(by category)" unless an official name and its published source are configured.
+- **Departments:** generic function labels (e.g. "Sanitation & waste") unless an official name and its published source are configured.

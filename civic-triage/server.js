@@ -190,7 +190,7 @@ async function storeMedia(list) {
 }
 // flush pending writes when the host stops the service (e.g. Render redeploy)
 process.on('SIGTERM', async () => { clearTimeout(saveT); await flush(); process.exit(0); });
-const deptName = k => DEPT_CONFIG[k] ? DEPT_CONFIG[k].name : `${DEPTS[k] || k} (by category)`;
+const deptName = k => DEPT_CONFIG[k] ? DEPT_CONFIG[k].name : (DEPTS[k] || k);
 function tokens(s) { return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 3)); }
 function jac(a, b) { if (!a.size || !b.size) return 0; let i = 0; for (const x of a) if (b.has(x)) i++; return i / (a.size + b.size - i); }
 

@@ -41,10 +41,6 @@ const CATS = {
 };
 
 // ---------- db ----------
-let db = { users: {}, reports: {}, notices: [], seq: 1 };
-try { db = JSON.parse(fs.readFileSync(DBF, 'utf8')); } catch (e) { /* fresh */ }
-let saveT = null;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => fs.writeFile(DBF + '.tmp', JSON.stringify(db), () => fs.rename(DBF + '.tmp', DBF, () => { })), 200); }
 const now = () => Date.now();
 const DAY = 864e5;
 const err = (code, msg) => Object.assign(new Error(msg), { code });
@@ -82,14 +78,92 @@ function parseMedia(list) {
   }
   return out;
 }
+// ---------- storage: Supabase (Postgres table app_docs + Storage bucket) or local files for dev ----------
+// Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_BUCKET (default report-photos).
+// Each user / report / notice is one row in app_docs(id text pk, kind text, data jsonb, updated_at timestamptz).
+const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, ''), SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SB_BUCKET = process.env.SUPABASE_BUCKET || 'report-photos';
+const useSupabase = !!(SB_URL && SB_KEY);
+const sbHeaders = (extra = {}) => ({ apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, ...extra });
+const hashOf = d => crypto.createHash('sha1').update(JSON.stringify(d)).digest('hex');
+const lastHash = new Map();
+let db = { users: {}, reports: {}, notices: [] };
+
+async function loadDb() {
+  if (!useSupabase) {
+    try { db = JSON.parse(fs.readFileSync(DBF, 'utf8')); } catch (e) { /* fresh local db */ }
+    console.log('Storage: local files in ./data (set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for persistent storage)');
+    return;
+  }
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      const rows = [];
+      for (let from = 0; ; from += 1000) {
+        const res = await fetch(`${SB_URL}/rest/v1/app_docs?select=id,kind,data&order=id`, { headers: sbHeaders({ Range: `${from}-${from + 999}`, 'Range-Unit': 'items' }), signal: AbortSignal.timeout(20000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+        const page = await res.json(); rows.push(...page);
+        if (page.length < 1000) break;
+      }
+      for (const r of rows) {
+        if (r.kind === 'user') db.users[r.data.id] = r.data;
+        else if (r.kind === 'report') db.reports[r.data.id] = r.data;
+        else if (r.kind === 'notice') db.notices.push(r.data);
+        lastHash.set(r.id, hashOf(r.data));
+      }
+      db.notices.sort((a, b) => a.t - b.t);
+      console.log(`Storage: Supabase (${rows.length} records loaded)`);
+      return;
+    } catch (e) {
+      console.error(`Supabase load failed (attempt ${attempt}/6): ${e.message}`);
+      await new Promise(r => setTimeout(r, 2000 * attempt));
+    }
+  }
+  console.error('Could not load data from Supabase. Exiting so the host restarts the service (never starting with an empty database).');
+  process.exit(1);
+}
+
+let saveT = null, saving = false, saveAgain = false;
+function save() { clearTimeout(saveT); saveT = setTimeout(flush, 250); }
+async function flush() {
+  if (!useSupabase) { fs.writeFile(DBF + '.tmp', JSON.stringify(db), () => fs.rename(DBF + '.tmp', DBF, () => { })); return; }
+  if (saving) { saveAgain = true; return; }
+  saving = true;
+  try {
+    const rows = [];
+    const add = (kind, d) => { const id = kind + ':' + d.id, h = hashOf(d); if (lastHash.get(id) !== h) rows.push({ id, kind, data: d, h }); };
+    for (const u of Object.values(db.users)) add('user', u);
+    for (const r of Object.values(db.reports)) add('report', r);
+    for (const n of db.notices) add('notice', n);
+    for (let i = 0; i < rows.length; i += 50) {
+      const chunk = rows.slice(i, i + 50), ts = new Date().toISOString();
+      const res = await fetch(`${SB_URL}/rest/v1/app_docs`, {
+        method: 'POST', headers: sbHeaders({ 'content-type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
+        body: JSON.stringify(chunk.map(r => ({ id: r.id, kind: r.kind, data: r.data, updated_at: ts }))), signal: AbortSignal.timeout(20000)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+      for (const r of chunk) lastHash.set(r.id, r.h);
+    }
+  } catch (e) { console.error('Supabase save failed, retrying in 5 s:', e.message); setTimeout(save, 5000); }
+  finally { saving = false; if (saveAgain) { saveAgain = false; save(); } }
+}
 async function storeMedia(list) {
   for (const o of list) {
     if (o.url) continue;
-    fs.writeFileSync(path.join(MEDIA, o.name), o.buf);
-    o.url = '/media/' + o.name;
+    if (useSupabase) {
+      const res = await fetch(`${SB_URL}/storage/v1/object/${encodeURIComponent(SB_BUCKET)}/${o.name}`, {
+        method: 'POST', headers: sbHeaders({ 'content-type': o.mime, 'x-upsert': 'true', 'cache-control': '86400' }), body: o.buf, signal: AbortSignal.timeout(30000)
+      });
+      if (!res.ok) throw err(502, `Photo upload failed (storage HTTP ${res.status}). Please try again.`);
+      o.url = `${SB_URL}/storage/v1/object/public/${encodeURIComponent(SB_BUCKET)}/${o.name}`;
+    } else {
+      fs.writeFileSync(path.join(MEDIA, o.name), o.buf);
+      o.url = '/media/' + o.name;
+    }
   }
   return list;
 }
+// flush pending writes when the host stops the service (e.g. Render redeploy)
+process.on('SIGTERM', async () => { clearTimeout(saveT); await flush(); process.exit(0); });
 const deptName = k => DEPTS[k] || k;
 function tokens(s) { return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 3)); }
 function jac(a, b) { if (!a.size || !b.size) return 0; let i = 0; for (const x of a) if (b.has(x)) i++; return i / (a.size + b.size - i); }
@@ -657,6 +731,7 @@ R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
   }
   save(); return n;
 });
+R('GET', /^\/api\/health$/, () => ({ ok: true, storage: useSupabase ? 'supabase' : 'local', ai: aiConfigured(), reports: Object.keys(db.reports).length, time: new Date().toISOString() }));
 R('GET', /^\/api\/dashboard$/, ({ q }) => dashboard(q.path ? q.path.split('|').filter(Boolean) : ['India'], +q.depth || 0));
 
 
@@ -676,7 +751,7 @@ function serveFile(res, file, req) {
     fs.createReadStream(file).pipe(res);
   });
 }
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x'), pn = decodeURIComponent(url.pathname);
   if (pn.startsWith('/api/')) {
     const chunks = []; let size = 0;
@@ -699,4 +774,5 @@ http.createServer((req, res) => {
   const f = path.normalize(path.join(__dirname, 'public', pn === '/' ? 'index.html' : pn));
   if (!f.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
   serveFile(res, f, req);
-}).listen(PORT, () => console.log(`Civic triage running on http://localhost:${PORT}`));
+});
+loadDb().then(() => server.listen(PORT, () => console.log(`Civic triage running on http://localhost:${PORT}`)));

@@ -4,7 +4,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const api = async (m, u, b) => {
   const r = await fetch(u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { data: j });
   return j;
 };
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('show'), 3500); }
@@ -119,7 +119,7 @@ async function feed() {
   ${cit && ME.suspendedUntil > Date.now() ? `<div class="warn">⛔ Your account is suspended until ${new Date(ME.suspendedUntil).toLocaleString()} for repeated false reports. You can read but not post, vote or comment.</div>` : ''}
   <div class="row"><h2 class="grow" style="margin:0">${cit ? '📰 Community feed' : '📥 Issue queue – ' + esc(ME.office)}</h2>
   ${cit ? `<button class="btn pri" onclick="nav('report')">➕ Report issue</button>` : ''}</div>
-  <p class="meta">${cit ? `Showing issues within <b>${filters.radius} km</b> of ${useGps ? 'your live GPS location' : esc(ME.path.slice(-1)[0])}. Reports circulate only around their location. ✓ "On-site" = upvoted by someone within ${H.config.confirmM} m (live GPS).` : `Jurisdiction: ${esc(ME.path.join(' › '))} · Dept: ${esc(ME.dept === 'all' ? 'All' : H.depts[ME.dept])}. Issues auto-escalate upward if the SLA lapses.`}</p>
+  <p class="meta">${cit ? `Showing issues ${useGps ? `within <b>${filters.radius} km</b> of your live location` : `in <b>${esc(ME.path.slice(-1)[0])}</b> (allow location access to see issues near you)`}. Reports circulate only around their location. ✓ "On-site" = upvoted by someone within ${H.config.confirmM} m (live GPS).` : `Jurisdiction: ${esc(ME.path.join(' › '))} · Dept: ${esc(ME.dept === 'all' ? 'All' : H.depts[ME.dept])}. Issues auto-escalate upward if the SLA lapses.`}</p>
   <div class="row">
    ${cit ? `<select id="f-rad">${[1, 2, 5, 10, 25].map(r => `<option value="${r}" ${filters.radius == r ? 'selected' : ''}>${r} km</option>`).join('')}</select>
    <button class="btn ${useGps ? 'on' : ''}" onclick="toggleGps()">📍 ${useGps ? 'Using live GPS' : 'Use live GPS'}</button>` : `<select id="f-scope"><option value="mine">Assigned to my level</option><option value="all">Everything in jurisdiction</option><option value="removed">Removed (flagged) posts</option></select>`}
@@ -130,6 +130,7 @@ async function feed() {
   ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || 5; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = $('#f-cat').value; loadList(); }; });
   $('#f-q').oninput = e => { filters.q = e.target.value; clearTimeout(feed.t); feed.t = setTimeout(loadList, 300); };
   loadList();
+  if (cit && !feed.asked) { feed.asked = true; curPos().then(p => { if (p && !useGps && page === 'feed') { useGps = true; feed(); } }); }
 }
 async function toggleGps() {
   if (!useGps) { const p = await curPos(); if (!p) return toast('Location permission denied or unavailable'); useGps = true; } else useGps = false;
@@ -152,13 +153,14 @@ function mediaHtml(l) {
 function card(r) {
   const cit = ME.role === 'citizen';
   return `<div class="card" id="c-${r.id}">
-  <div class="row"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity} · ${r.score}</span><span class="chip st-${r.status}">${STAT[r.status]}</span>
+  <div class="row"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity}${r.sev ? ' · ' + r.sev + '/5' : ''}</span>${r.needsReview ? '<span class="chip st-claimed">👀 Needs human review</span>' : ''}<span class="chip st-${r.status}">${STAT[r.status]}</span>
   ${r.confirmed ? `<span class="chip st-resolved">✓ ${r.confirmed} on-site</span>` : ''}${r.merged ? `<span class="chip">🔗 ${r.reporters} reports merged</span>` : ''}${r.removed ? '<span class="chip st-open">Removed</span>' : ''}
   <span class="meta grow" style="text-align:right">${ago(r.createdAt)}</span></div>
   <h3 style="margin-top:8px">${esc(r.caption)}</h3>
   ${r.description ? `<div style="white-space:pre-wrap">${esc(r.description)}</div>` : ''}
   ${r.media.length ? mediaHtml(r.media) : `<div class="ph">${ICON[r.category]}</div>`}
-  <div class="meta">📍 ${esc(r.address)} · ${esc(r.path.slice(2).join(' › '))}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}<br>
+  ${r.ai ? `<div class="meta">🤖 AI (${Math.round(r.ai.confidence * 100)}% confident): ${esc(r.ai.reasoning)}</div>` : ''}
+  <div class="meta">📍 ${esc(r.address || 'Pinned location')}${r.locSource ? ` · ${LOCSRC[r.locSource] || ''}` : ''}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}<br>
   by <b>${esc(r.author)}</b>${r.mine ? ' (you)' : ''} · Routed to <b>${r.assignedName}</b> · ${esc(r.deptLabel)} · SLA ${r.slaDays}d</div>
   ${r.afterMedia.length ? `<div class="sep"></div><b>Before → After</b><div class="ba"><div>${mediaHtml(r.media.filter(m => m.type === 'image').slice(0, 1))}</div><div>${mediaHtml(r.afterMedia.slice(0, 1))}</div></div>` : ''}
   ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">🤖 <b>${{ verified: 'VERIFIED FIXED', not_fixed: 'NOT FIXED', inconclusive: 'INCONCLUSIVE' }[r.verdict.result] || esc(r.verdict.result)}</b>${r.verdict.by === 'ai' ? ` · AI confidence ${Math.round(r.verdict.confidence * 100)}%` : ` · ${esc(r.verdict.by)}`}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from spot` : ''}<br>${esc(r.verdict.reason)}</div>` : ''}
@@ -168,7 +170,7 @@ function card(r) {
   <div class="row">
    ${cit ? `<button class="btn ${r.voted ? 'on' : ''}" onclick="upvote('${r.id}')">▲ Upvote · ${r.votes}</button>` : `<span class="chip">▲ ${r.votes} upvotes</span>`}
    <button class="btn" onclick="openThread('${r.id}')">💬 Messages · ${r.comments}</button>
-   <button class="btn" onclick="openTimeline('${r.id}')">🕒 Timeline</button>
+   <button class="btn" onclick="openTimeline('${r.id}')">🧠 Agent trace & timeline</button>
    <span class="grow"></span>
    ${cit && !r.mine && !r.flagged ? `<button class="btn danger" onclick="flag('${r.id}')">🚩 Report false</button>` : ''}${r.flagged ? '<span class="meta">flagged by you</span>' : ''}
    ${!cit && r.status !== 'resolved' ? authActions(r) : ''}</div></div>`;
@@ -192,8 +194,13 @@ async function resVote(id, ok) { try { await api('POST', `/api/reports/${id}/com
 async function act(id, action) { try { await api('POST', `/api/reports/${id}/status`, { user: ME.id, action }); toast('Updated'); loadList(); } catch (e) { toast(e.message); } }
 async function openTimeline(id) {
   const r = await api('GET', `/api/reports/${id}?user=${ME.id}`);
-  modal(`<h3>🕒 ${esc(r.caption)}</h3><div class="tl">${r.timeline.map(t => `<div><b>${new Date(t.t).toLocaleString()}</b> – ${esc(t.text)}</div>`).join('')}</div>
-  ${r.ai ? `<p class="meta">🤖 AI image check: severity ${r.ai.severity}/10 – ${esc(r.ai.summary)}</p>` : ''}<button class="btn" onclick="closeModal()">Close</button>`);
+  modal(`<h3>🧠 ${esc(r.caption)}</h3>${r.needsReview ? `<div class="warn">👀 Needs human review: ${esc(r.reviewWhy.join('; '))}</div>` : ''}
+  ${r.ai && r.ai.evidence && r.ai.evidence.length ? `<div class="meta"><b>Visual evidence:</b> ${r.ai.evidence.map(esc).join(' · ')}</div>` : ''}
+  ${traceHtml(r.trace)}
+  ${r.verdict && r.verdict.evidence && r.verdict.evidence.length ? `<div class="meta"><b>Fix verification evidence${r.verdict.model ? ' (' + esc(r.verdict.model) + ')' : ''}:</b> ${r.verdict.evidence.map(esc).join(' · ')}</div>` : ''}
+  ${r.geo ? `<div class="meta">Address source: ${esc(r.geo.source)}, fetched ${new Date(r.geo.t).toLocaleString()}</div>` : ''}
+  <h3 style="margin-top:12px">🕒 Timeline</h3><div class="tl">${r.timeline.map(t => `<div><b>${new Date(t.t).toLocaleString()}</b> – ${esc(t.text)}</div>`).join('')}</div>
+  <button class="btn" style="margin-top:10px" onclick="closeModal()">Close</button>`);
 }
 async function openThread(id) {
   const r = await api('GET', `/api/reports/${id}?user=${ME.id}`);
@@ -202,6 +209,39 @@ async function openThread(id) {
   <div class="row" style="margin-top:8px"><input id="mtext" class="grow" placeholder="Write a message…" maxlength="500"><button class="btn pri" onclick="sendMsg('${id}')">Send</button><button class="btn" onclick="closeModal();loadList()">Close</button></div>`);
 }
 async function sendMsg(id) { const t = $('#mtext').value; if (!t.trim()) return; try { await api('POST', `/api/reports/${id}/comments`, { user: ME.id, text: t }); openThread(id); } catch (e) { toast(e.message); } }
+
+// ---------- photo GPS (EXIF) ----------
+// Reads GPS coordinates from a JPEG's EXIF block before the image is resized (resizing strips EXIF).
+async function exifGps(file) {
+  try {
+    if (!/jpe?g/i.test(file.type)) return null;
+    const v = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    let o = 2;
+    while (o < v.byteLength - 10) {
+      const marker = v.getUint16(o), len = v.getUint16(o + 2);
+      if ((marker & 0xFF00) !== 0xFF00) return null;
+      if (marker === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) return tiffGps(v, o + 10);
+      o += 2 + len;
+    }
+  } catch (e) { /* unreadable EXIF: ignore */ }
+  return null;
+}
+function tiffGps(v, t) {
+  const le = v.getUint16(t) === 0x4949, u16 = o => v.getUint16(o, le), u32 = o => v.getUint32(o, le);
+  const ifd0 = t + u32(t + 4); let gps = null;
+  for (let i = 0, n = u16(ifd0); i < n; i++) { const e = ifd0 + 2 + i * 12; if (u16(e) === 0x8825) gps = t + u32(e + 8); }
+  if (!gps) return null;
+  const g = {};
+  for (let i = 0, n = u16(gps); i < n; i++) {
+    const e = gps + 2 + i * 12, tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+    if (tag === 1 || tag === 3) g[tag] = String.fromCharCode(v.getUint8(e + 8));
+    if ((tag === 2 || tag === 4) && type === 5 && cnt === 3) { const p = t + u32(e + 8), r = k => u32(p + k * 8) / u32(p + k * 8 + 4); g[tag] = r(0) + r(1) / 60 + r(2) / 3600; }
+  }
+  if (g[2] == null || g[4] == null) return null;
+  const lat = g[2] * (g[1] === 'S' ? -1 : 1), lng = g[4] * (g[3] === 'W' ? -1 : 1);
+  return isFinite(lat) && isFinite(lng) && !(lat === 0 && lng === 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+}
 
 // ---------- image helpers ----------
 function readFile(f) {
@@ -218,42 +258,80 @@ function readFile(f) {
 }
 let pending = [];
 async function addFiles(inp) {
-  for (const f of inp.files) { if (pending.length >= 8) break; try { pending.push(await readFile(f)); } catch (e) { toast(e.message); } }
+  for (const f of inp.files) {
+    if (pending.length >= 8) break;
+    if (page === 'report') { const g = await exifGps(f); if (g && (!rpos || rpos.source !== 'exif')) setRpos(g, 'exif'); }
+    try { pending.push(await readFile(f)); } catch (e) { toast(e.message); }
+  }
   inp.value = ''; renderPrev();
 }
 function renderPrev() {
   const p = $('#prev'); if (!p) return;
   p.innerHTML = pending.map((m, i) => `<div style="position:relative;flex:none">${m.type === 'image' ? `<img src="${m.data}">` : m.type === 'video' ? `<video src="${m.data}" controls></video>` : `<audio src="${m.data}" controls></audio>`}<button class="btn" style="position:absolute;top:2px;right:2px;padding:0 6px" onclick="pending.splice(${i},1);renderPrev()">✕</button></div>`).join('');
-  const h = $('#mhint'); if (h) h.textContent = `${pending.length}/8 files · more photos raise the priority score`;
+  const h = $('#mhint'); if (h) h.textContent = `${pending.length}/8 files`;
 }
 
 // ---------- report ----------
+// Location priority: photo GPS (EXIF) > device GPS > manual (map pin or address search). Never a default location.
 let rpos = null;
+const LOCSRC = { gps: '📍 device GPS', exif: '📷 photo GPS (EXIF)', manual: '✋ location set manually' };
+function setRpos(p, source, label) {
+  rpos = { lat: p.lat, lng: p.lng, source };
+  const el = $('#r-loc'); if (el) el.innerHTML = `✓ ${LOCSRC[source]}: ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}${label ? ' · ' + esc(label) : ''}`;
+  if (window.onRposChange) window.onRposChange(rpos);
+}
 function report() {
   if (ME.role !== 'citizen') return nav('feed');
   pending = []; rpos = null;
   $('#app').innerHTML = `<div class="card"><h2>➕ Report a civic issue</h2>
-  <p class="meta">Posted anonymously in <b>${esc(ME.path.slice(2).join(' › '))}</b>. It circulates within ${H.config.circulationKm} km so neighbours can upvote and confirm it. Duplicate reports of the same problem nearby are merged automatically.</p>
-  <label>Category *</label><select id="r-cat">${Object.entries(H.cats).map(([k, c]) => `<option value="${k}">${ICON[k]} ${esc(c.label)}</option>`).join('')}</select>
+  <p class="meta">Posted anonymously. An AI agent checks the photo, classifies the issue, scores severity, finds duplicates within 150 m and routes it. You will see every step.</p>
+  <label>Photos (at least 1) / video / audio, up to 8 *</label><input type="file" accept="image/*,video/*,audio/*" multiple onchange="addFiles(this)">
+  <div class="meta" id="mhint">0/8 files · a photo with GPS sets the location automatically</div><div class="media" id="prev"></div>
   <label>Caption *</label><input id="r-cap" maxlength="140" placeholder="One line: what's wrong?">
   <label>Description</label><textarea id="r-desc" rows="3" maxlength="1000" placeholder="Details: how long, who is affected, any danger…"></textarea>
-  <label>Address / landmark *</label><input id="r-addr" maxlength="200" placeholder="e.g. Opposite Gate 2, Malancha Road">
-  <label>Exact location</label><div class="row"><button class="btn" onclick="pinGps()">📍 Use my live GPS</button><span class="meta" id="r-loc">Using centre of ${esc(ME.path.slice(-1)[0])} (less accurate – GPS recommended)</span></div>
-  <label>Photos / video / audio (up to 8)</label><input type="file" accept="image/*,video/*,audio/*" multiple onchange="addFiles(this)">
-  <div class="meta" id="mhint">0/8 files · more photos raise the priority score</div><div class="media" id="prev"></div>
-  <div class="row" style="margin-top:12px"><button class="btn" onclick="nav('feed')">Cancel</button><button class="btn pri" id="r-go" onclick="submitReport()">Submit report</button></div></div>`;
+  <label>Category</label><select id="r-cat"><option value="">🤖 Let the AI decide</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}">${ICON[k]} ${esc(c.label)}</option>`).join('')}</select>
+  <label>Location *</label>
+  <div class="meta" id="r-loc">Not set yet. Allow location access, add a photo with GPS, drop a pin on the map, or search an address.</div>
+  <div class="row" style="margin-top:6px"><button class="btn" onclick="pinGps()">📍 Use my location</button>
+   <input id="r-addr" class="grow" maxlength="200" placeholder="Address / landmark (optional, or search it)"><button class="btn" onclick="findAddr()">🔎 Find</button></div>
+  <div id="r-results"></div><div id="r-map" class="map small"></div>
+  <div class="row" style="margin-top:12px"><button class="btn" onclick="nav('feed')">Cancel</button><button class="btn pri" id="r-go" onclick="submitReport()">Submit to AI agent</button></div></div>`;
+  if (window.mountPinMap) mountPinMap();
+  getGps().then(p => { if (p && !rpos && page === 'report') { GPS = p; setRpos(p, 'gps'); } });
 }
-async function pinGps() { const p = await getGps(); if (!p) return toast('Could not get location'); rpos = p; GPS = p; $('#r-loc').textContent = `✓ Live location locked (${p.lat.toFixed(5)}, ${p.lng.toFixed(5)})`; }
+async function pinGps() { const p = await getGps(); if (!p) return toast('Location permission denied or unavailable. Drop a pin or search an address.'); GPS = p; setRpos(p, 'gps'); }
+async function findAddr() {
+  const q = $('#r-addr').value.trim(); if (q.length < 3) return toast('Type an address or landmark first');
+  $('#r-results').innerHTML = '<div class="meta">Searching OpenStreetMap…</div>';
+  try {
+    const r = await api('GET', '/api/geocode?q=' + encodeURIComponent(q));
+    if (!r.results.length) { $('#r-results').innerHTML = '<div class="meta">No match. Try a nearby landmark, or drop a pin on the map.</div>'; return; }
+    window._geo = r.results;
+    $('#r-results').innerHTML = r.results.map((x, i) => `<div class="pick" onclick="pickAddr(${i})">📍 ${esc(x.display)}</div>`).join('') + `<div class="meta">Source: ${esc(r.source)}</div>`;
+  } catch (e) { $('#r-results').innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+}
+function pickAddr(i) { const x = window._geo[i]; setRpos(x, 'manual', x.display); $('#r-results').innerHTML = ''; }
+function traceHtml(trace) {
+  if (!trace || !trace.length) return '';
+  const ic = { ok: '✅', warn: '⚠️', fail: '❌', rejected: '⛔', skipped: '⏭️' };
+  return `<div class="trace"><b>🧠 Agent trace</b>${trace.map((t, i) => `<div class="tstep ts-${t.status}"><div class="row"><b>${i + 1}. ${esc(t.step)}</b><span>${ic[t.status] || ''} ${esc(t.status)}</span><span class="meta grow" style="text-align:right">${t.ms != null ? (t.ms / 1000).toFixed(1) + 's' : ''}${t.source ? ' · ' + esc(t.source) : ''}</span></div><div>${esc(t.output)}</div></div>`).join('')}</div>`;
+}
 async function submitReport() {
-  const b = { user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending };
-  if (rpos) Object.assign(b, { lat: rpos.lat, lng: rpos.lng, gps: true });
+  if (!pending.some(m => m.type === 'image')) return toast('Add at least one photo');
+  if (!rpos) return toast('Set the location first (GPS, photo GPS, map pin or address search)');
+  const b = { user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
   $('#r-go').disabled = true;
+  modal(`<h3>🤖 AI agent is working…</h3><div class="meta">guardrail → perceive → critic → geolocate → dedupe → route → publish</div><div class="spinner"></div>`);
   try {
     const r = await api('POST', '/api/reports', b);
-    modal(`<h3>${r.merged ? '🔗 Merged with an existing report' : '✅ Report submitted'}</h3>
-    <p>${r.merged ? `Someone nearby already reported this issue. Your report and photos were <b>merged</b> into it, so it now carries ${r.report.reporters} reports and a higher priority.` : `Auto-evaluated as <span class="chip sev-${r.report.severity}">${r.report.severity} (${r.report.score}/100)</span> and routed to the <b>${r.report.assignedName}</b> authority – ${esc(r.report.deptLabel)}.`}</p>
-    <button class="btn pri" onclick="closeModal();nav('feed')">Go to feed</button>`);
-  } catch (e) { toast(e.message); $('#r-go').disabled = false; }
+    const rep = r.report;
+    modal(`<h3>${r.merged ? '🔗 Merged with an existing report' : '✅ Report published'}</h3>
+    <p>${r.merged ? `Someone nearby already reported this. Your report and photos were <b>merged</b> into it (${rep.reporters} reports combined), raising its priority.` : rep.sev ? `AI triage: <b>${esc(rep.categoryLabel)}</b>, <span class="chip sev-${rep.severity}">${rep.severity} · ${rep.sev}/5</span>, SLA ${rep.slaDays} days, routed to the <b>${rep.assignedName}</b> authority (${esc(rep.deptLabel)}).` : `The AI could not triage this confidently, so it is queued for <b>human review</b>.`}</p>
+    ${traceHtml(r.trace)}<button class="btn pri" onclick="closeModal();nav('feed')">Go to feed</button>`);
+  } catch (e) {
+    modal(`<h3>⛔ Not published</h3><p>${esc(e.message)}</p>${traceHtml(e.data && e.data.trace)}<button class="btn" onclick="closeModal()">Back to the form</button>`);
+    $('#r-go').disabled = false;
+  }
 }
 
 // ---------- authority resolve ----------

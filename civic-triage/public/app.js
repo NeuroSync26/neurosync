@@ -142,7 +142,7 @@ async function loadList() {
   if (!cit) { const sc = ($('#f-scope') || {}).value || 'mine'; p.set('scope', sc === 'mine' ? 'mine' : 'all'); if (sc === 'removed') p.set('removed', '1'); }
   try {
     const l = await api('GET', '/api/reports?' + p);
-    $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="card meta">No issues match. ${cit ? 'Try a bigger radius, or be the first to report one.' : ''}</div>`;
+    $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="card meta">No reports yet. ${cit ? 'Try a bigger radius, or be the first to report one.' : ''}</div>`;
   } catch (e) { $('#list').innerHTML = `<div class="card warn">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
 function mediaHtml(l) {
@@ -153,7 +153,7 @@ function card(r) {
   const cit = ME.role === 'citizen';
   return `<div class="card" id="c-${r.id}">
   <div class="row"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity} · ${r.score}</span><span class="chip st-${r.status}">${STAT[r.status]}</span>
-  ${r.confirmed ? `<span class="chip st-resolved">✓ ${r.confirmed} on-site</span>` : ''}${r.merged ? `<span class="chip">🔗 ${r.reporters} reports merged</span>` : ''}${r.removed ? '<span class="chip st-open">Removed</span>' : ''}${r.demo ? '<span class="chip">demo data</span>' : ''}
+  ${r.confirmed ? `<span class="chip st-resolved">✓ ${r.confirmed} on-site</span>` : ''}${r.merged ? `<span class="chip">🔗 ${r.reporters} reports merged</span>` : ''}${r.removed ? '<span class="chip st-open">Removed</span>' : ''}
   <span class="meta grow" style="text-align:right">${ago(r.createdAt)}</span></div>
   <h3 style="margin-top:8px">${esc(r.caption)}</h3>
   ${r.description ? `<div style="white-space:pre-wrap">${esc(r.description)}</div>` : ''}
@@ -306,7 +306,7 @@ async function dashboardPage() {
   dashboardPage.init = false;
   if (!dpath) dpath = ME.role === 'authority' ? ME.path.slice() : ME.path.slice(0, 3);
   $('#app').innerHTML = `<div class="card"><h2>📊 ${ME.role === 'authority' ? 'Performance dashboard' : 'Public accountability dashboard'}</h2>
-  <p class="meta">Choose any level to see how authorities are performing there. Performance = 50% resolution rate + 30% share of issues within SLA + 20% speed. (Demo seed data is included so dashboards are not empty.)</p>
+  <p class="meta">Choose any level to see how authorities are performing there. Performance = 50% resolution rate + 30% share of issues within SLA + 20% speed.</p>
   <div id="dpick"></div><label>Rank by level</label><select id="ddepth" style="max-width:260px"></select></div><div id="dbody">Loading…</div>`;
   mountPicker($('#dpick'), { min: 1, max: 5, initial: dpath, onChange: (p) => { const changed = p.join() !== dpath.join(); dpath = p; if (changed || !dashboardPage.init) { dashboardPage.init = true; fillDepth(); loadDash(); } } });
   $('#ddepth').onchange = e => { ddepth = +e.target.value; loadDash(); };
@@ -324,11 +324,11 @@ async function loadDash() {
   $('#dbody').innerHTML = `<div class="tiles">
   <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b style="color:var(--ok)">${s.resolved}</b><span>Resolved</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div>
   <div class="tile"><b>${s.inProgress}</b><span>In progress</span></div><div class="tile"><b style="color:var(--bad)">${s.overdue}</b><span>Past SLA</span></div><div class="tile"><b>${s.critical}</b><span>Critical open</span></div>
-  <div class="tile"><b>${s.rate}%</b><span>Resolution rate</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf}</b><span>Performance /100</span></div></div>
+  <div class="tile"><b>${s.rate}%</b><span>Resolution rate</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
   <div class="card"><h3>🏆 Ranking – ${['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d.depth - 1]} under ${esc(d.path.join(' › '))}</h3>
   ${d.ranking.length ? `<table><tr><th>#</th><th>Area</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th><th>Avg days</th></tr>${d.ranking.map(x => `<tr class="${mine.startsWith(x.path.join('>')) ? 'me' : ''}"><td>${x.rank}</td><td><b>${esc(x.name)}</b>${x.trail ? `<div class="meta">${esc(x.trail)}</div>` : ''}${mine.startsWith(x.path.join('>')) ? ' <span class="chip">your area</span>' : ''}</td>
-  <td style="min-width:90px"><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}</table>` : '<div class="meta">No data at this level yet.</div>'}</div>
-  <div class="card"><h3>🏢 Department-wise</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No data</div>'}</div>
-  <div class="card"><h3>🧩 By issue type</h3><table><tr><th>Type</th><th>Total</th><th>Resolved</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}</table></div>`;
+  <td style="min-width:90px"><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
+  <div class="card"><h3>🏢 Department-wise</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
+  <div class="card"><h3>🧩 By issue type</h3>${d.cats.length ? `<table><tr><th>Type</th><th>Total</th><th>Resolved</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>`;
 }
 window.nav = nav;

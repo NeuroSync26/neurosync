@@ -12,6 +12,6 @@ Zero-dependency Node.js (>=18) app. Run `node server.js`, then open http://local
 - Dashboards for everyone: level-wise stats, performance score, rankings at state/district/city/locality level, department and issue-type tables.
 
 ## Notes
-- ~200 demo reports are seeded on first run (marked "demo data"). Delete `data/` to reset.
+- No demo or seed data: every report comes from a real user submission. Delete `data/` to reset a local run.
 - Optional AI: `ANTHROPIC_API_KEY` (and `CLAUDE_MODEL`) enables image severity and before/after verification. Without it a heuristic check runs and community confirmation decides.
 - The hierarchy covers all states/UTs and major districts; West Bengal districts and Kharagpur localities are detailed. For anything else use "Not listed – type my own".

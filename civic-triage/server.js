@@ -152,7 +152,7 @@ function view(r, uid) {
     status: r.status, score: r.score, severity: sevLabel(r.score), assignedLevel: assigned(r), assignedName: LEVEL_NAMES[assigned(r)],
     slaDays: CATS[r.category].sla, createdAt: r.createdAt, resolvedAt: r.resolvedAt || null,
     author: anon(r.user, r.id), mine: r.user === uid, reporters: 1 + r.supporters.length, merged: r.supporters.length > 0,
-    timeline: r.timeline, ai: r.ai || null, verdict: r.verdict || null, removed: !!r.removed, demo: !!r.demo,
+    timeline: r.timeline, ai: r.ai || null, verdict: r.verdict || null, removed: !!r.removed,
     resolutionVotes: { ok: Object.values(r.resVotes || {}).filter(x => x).length, bad: Object.values(r.resVotes || {}).filter(x => !x).length },
     myResVote: r.resVotes && r.resVotes[uid] !== undefined ? r.resVotes[uid] : null
   };
@@ -199,7 +199,7 @@ function stats(list) {
   return {
     total, resolved: resolved.length, pending: open.length, inProgress: list.filter(r => r.status === 'in_progress').length, overdue,
     critical: open.filter(r => sevLabel(r.score) === 'Critical').length, avgDays: avgDays == null ? null : +avgDays.toFixed(1),
-    rate: Math.round(rate * 100), perf: Math.round(100 * (0.5 * rate + 0.3 * (1 - overdueRatio) + 0.2 * speed))
+    rate: Math.round(rate * 100), perf: total ? Math.round(100 * (0.5 * rate + 0.3 * (1 - overdueRatio) + 0.2 * speed)) : null
   };
 }
 function dashboard(pre, depth) {
@@ -344,7 +344,7 @@ R('POST', /^\/api\/reports\/([\w-]+)\/flag$/, ({ m, body: b }) => {
   if (!r.removed && Object.keys(r.flags).length >= FLAGS_TO_REMOVE) {
     r.removed = true; addTL(r, 'Removed from public feed after multiple citizen flags.');
     const author = db.users[r.user];
-    if (author && !r.demo) {
+    if (author) {
       author.strikes = (author.strikes || 0) + 1;
       notify(r.path, 'abuse', `Report ${r.id} ("${r.caption}") was flagged as false information by ${Object.keys(r.flags).length} citizens and removed. Author ${author.id} now has ${author.strikes} strike(s).`, { reportId: r.id, citizen: author.id });
       if (author.strikes >= STRIKES_TO_SUSPEND) {
@@ -400,54 +400,6 @@ R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
 });
 R('GET', /^\/api\/dashboard$/, ({ q }) => dashboard(q.path ? q.path.split('|').filter(Boolean) : ['India'], +q.depth || 0));
 
-// ---------- seed demo data ----------
-function seed() {
-  if (Object.keys(db.reports).length) return;
-  let s = 42; const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
-  const places = [
-    [['India', 'West Bengal', 'Paschim Medinipur', 'Kharagpur', 'IIT Kharagpur'], .85], [['India', 'West Bengal', 'Paschim Medinipur', 'Kharagpur', 'Inda'], .45],
-    [['India', 'West Bengal', 'Paschim Medinipur', 'Kharagpur', 'Hijli'], .6], [['India', 'West Bengal', 'Paschim Medinipur', 'Kharagpur', 'Malancha'], .55],
-    [['India', 'West Bengal', 'Paschim Medinipur', 'Midnapore', 'Midnapore Town Centre'], .5],
-    [['India', 'West Bengal', 'Kolkata', 'Kolkata', 'Salt Lake (Bidhannagar)'], .75], [['India', 'West Bengal', 'Kolkata', 'Kolkata', 'Park Street'], .85],
-    [['India', 'West Bengal', 'Kolkata', 'Kolkata', 'Jadavpur'], .6], [['India', 'West Bengal', 'Kolkata', 'Kolkata', 'Behala'], .35],
-    [['India', 'West Bengal', 'Howrah', 'Howrah', 'Howrah Station Area'], .4],
-    [['India', 'Delhi', 'New Delhi', 'New Delhi'], .7], [['India', 'Delhi', 'South Delhi', 'South Delhi'], .6],
-    [['India', 'Maharashtra', 'Mumbai City', 'Mumbai'], .65], [['India', 'Maharashtra', 'Pune', 'Pune'], .8],
-    [['India', 'Karnataka', 'Bengaluru Urban', 'Bengaluru'], .55], [['India', 'Tamil Nadu', 'Chennai', 'Chennai'], .75],
-    [['India', 'Uttar Pradesh', 'Lucknow', 'Lucknow'], .5], [['India', 'Odisha', 'Khordha', 'Bhubaneswar'], .7]
-  ];
-  const caps = {
-    pothole: ['Deep pothole near the main crossing', 'Road cave-in after rain, two-wheelers skidding', 'Broken tarmac along market road'],
-    bridge: ['Cracks on bridge railing and deck', 'Foot-overbridge steps broken'],
-    water_leak: ['Main pipe leaking for days', 'Water gushing from burst pipeline'],
-    sewage: ['Drain overflowing onto the road', 'Sewage smell and stagnant water near school'],
-    pollution: ['Black smoke from burning waste', 'Factory effluent in the canal'],
-    garbage: ['Garbage piling up uncollected', 'Illegal dumping on the roadside'],
-    streetlight: ['Street light out for a week', 'Whole lane dark at night'],
-    electric_hazard: ['Live wire hanging low near footpath', 'Transformer sparking'],
-    other: ['Stray animal menace', 'Broken footpath tiles']
-  };
-  const keys = Object.keys(CATS);
-  for (const [p, q] of places) {
-    const g = coordsFor(p), n = 9 + Math.floor(rnd() * 6);
-    for (let i = 0; i < n; i++) {
-      const cat = keys[Math.floor(rnd() * keys.length)], age = rnd() * 40, id = rid('R', 5), created = now() - age * DAY;
-      const r = {
-        id, user: 'CZ-DEMO' + Math.floor(rnd() * 90 + 10), category: cat, dept: CATS[cat].dept, demo: true,
-        caption: caps[cat][Math.floor(rnd() * caps[cat].length)], description: '', address: `Near ${p[p.length - 1]}, sample landmark ${i + 1}`,
-        path: p, lat: g[0] + (rnd() - .5) * .012, lng: g[1] + (rnd() - .5) * .012, media: [], afterMedia: [], votes: {}, comments: [], flags: {}, supporters: [],
-        status: 'open', createdAt: created, timeline: [{ t: created, text: 'Report submitted by citizen.' }], resVotes: {}
-      };
-      const nv = Math.floor(rnd() * 25); for (let k = 0; k < nv; k++) r.votes['CZ-V' + k + id] = { t: created, confirmed: rnd() < .35 };
-      const sla = CATS[cat].sla;
-      if (rnd() < q * Math.min(1, age / (sla * 1.2))) { r.status = 'resolved'; r.resolvedAt = created + sla * DAY * (.4 + rnd() * 2.2 / (q + .3)); if (r.resolvedAt > now()) r.resolvedAt = now() - 3600e3; r.timeline.push({ t: r.resolvedAt, text: 'Resolved with after-photo verification.' }); }
-      else if (rnd() < .4) r.status = 'in_progress'; else if (rnd() < .5) r.status = 'acknowledged';
-      r.score = score(r); db.reports[id] = r;
-    }
-  }
-  save();
-}
-seed();
 
 // ---------- http ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mpeg': 'audio/mpeg', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.svg': 'image/svg+xml' };

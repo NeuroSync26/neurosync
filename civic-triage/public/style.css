@@ -175,7 +175,8 @@ h1{font-size:22px}.hero{padding-top:8px}.hero h1{font-size:36px}.lead{font-size:
 .locate-btn{display:grid!important;place-items:center}.locate-btn .ic{width:15px;height:15px}.locate-btn.busy .ic{animation:spin .8s linear infinite}
 [data-theme=dark] .leaflet-tile-pane{filter:brightness(.6) invert(1) contrast(3) hue-rotate(200deg) saturate(.3) brightness(.7)}
 /* landing */
-.hero-wrap{position:relative;margin:-32px -24px 0;padding:32px 24px 8px;overflow:hidden;border-radius:0 0 24px 24px}
+html,body{overflow-x:clip}
+.hero-wrap{position:relative;isolation:isolate;margin:-32px calc(50% - 50vw) 0;padding:48px calc(50vw - 50%) 40px;overflow:hidden;border-bottom:1px solid var(--line)}
 .hero-wrap::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(60% 70% at 15% 0%,rgba(37,99,235,.16),transparent 70%),radial-gradient(50% 60% at 95% 20%,rgba(13,148,136,.16),transparent 70%),radial-gradient(40% 50% at 60% 100%,rgba(124,58,237,.10),transparent 70%)}
 .hero-wrap::after{content:"";position:absolute;inset:0;z-index:-1;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:44px 44px;opacity:.35;-webkit-mask-image:radial-gradient(70% 70% at 50% 30%,#000,transparent);mask-image:radial-gradient(70% 70% at 50% 30%,#000,transparent)}
 .hero{max-width:none;display:grid;grid-template-columns:1.2fr .8fr;gap:40px;align-items:center}
@@ -189,4 +190,4 @@ h1{font-size:22px}.hero{padding-top:8px}.hero h1{font-size:36px}.lead{font-size:
 .hi{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff}.hi .ic{width:17px;height:17px}.hi.h1{background:#2563eb}.hi.h2{background:#7c3aed}.hi.h3{background:#16a34a}
 .stats b{color:var(--ink)}#hstats>div:nth-child(3) b{color:var(--ok)}#hstats>div:nth-child(4) b{color:var(--bad)}
 @media(max-width:920px){.hero{grid-template-columns:1fr}.flow{display:none}}
-@media(max-width:720px){.hero-wrap{margin:-20px -16px 0;padding:20px 16px 8px}}
+@media(max-width:720px){.hero-wrap{margin:-20px calc(50% - 50vw) 0;padding:24px calc(50vw - 50%) 24px}}

@@ -23,14 +23,42 @@ let H, ME, page, GPS = null, useGps = false, filters = { radius: 5, sort: 'prior
 })();
 
 function nav(p) { page = p; renderTop(); ({ welcome, register, feed, report, profile, dashboardPage, notices })[p](); window.scrollTo(0, 0); }
+// ---------- icons (inline SVG, Lucide-style strokes) ----------
+const ICP = {
+  home: '<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
+  plus: '<circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>',
+  chart: '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+  spark: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  up: '<path d="m18 15-6-6-6 6"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
+  check: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m22 4-10 10.01-3-3"/>',
+  landmark: '<path d="M3 22h18M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="m12 2 8 5H4z"/>',
+  gps: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>'
+};
+const ic = n => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICP[n] || ''}</svg>`;
+const TABS_C = [['feed', 'home', 'Feed'], ['report', 'plus', 'Report'], ['dashboardPage', 'chart', 'Dashboard'], ['profile', 'user', 'Profile']];
+const TABS_A = [['feed', 'inbox', 'Issues'], ['notices', 'bell', 'Notices'], ['dashboardPage', 'chart', 'Performance'], ['profile', 'landmark', 'Profile']];
 function renderTop() {
-  const cit = ME && ME.role === 'citizen';
-  const tabs = !ME ? [] : cit ? [['feed', '📰 Feed'], ['report', '➕ Report issue'], ['dashboardPage', '📊 Dashboard'], ['profile', '👤 Profile']]
-    : [['feed', '📥 Issues'], ['notices', '🔔 Notices'], ['dashboardPage', '📊 Performance'], ['profile', '🏛 Profile']];
-  $('#top').innerHTML = `<div class="brand">🇮🇳 Nagrik Sahayak<small>Transparent civic grievance & infrastructure triage</small></div>
-  <nav>${tabs.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" onclick="nav('${k}')">${l}</button>`).join('')}</nav>`;
+  const tabs = !ME ? [] : ME.role === 'citizen' ? TABS_C : TABS_A;
+  const btns = tabs.map(([k, i, l]) => `<button class="${page === k ? 'on' : ''}" onclick="nav('${k}')">${ic(i)}<span>${l}</span></button>`).join('');
+  $('#top').innerHTML = `<div class="topbar"><a class="brand" onclick="nav(ME ? 'feed' : 'welcome')"><span class="logo">${ic('shield')}</span><span><b>Nagrik Sahayak</b><small>AI-verified civic grievances</small></span></a>
+  <nav class="topnav">${btns}</nav>${H ? `<span class="aichip ${H.ai ? '' : 'off'}" title="${H.ai ? 'AI agent connected' : 'AI not configured: reports go to human review'}">${ic('spark')}${H.ai ? 'AI live' : 'AI offline'}</span>` : ''}</div>`;
+  $('#bottom').innerHTML = tabs.length ? `<nav class="tabbar">${btns}</nav>` : '';
+  document.body.classList.toggle('has-tabs', !!tabs.length);
 }
-function modal(html) { const m = $('#modal'); m.hidden = false; m.innerHTML = `<div class="modal">${html}</div>`; m.onclick = e => { if (e.target === m) closeModal(); }; }
+function modal(html) { const m = $('#modal'); m.hidden = false; m.innerHTML = `<div class="modal"><button class="mclose" onclick="closeModal()" aria-label="Close">${ic('x')}</button>${html}</div>`; m.onclick = e => { if (e.target === m) closeModal(); }; }
 function closeModal() { $('#modal').hidden = true; }
 
 // ---------- location picker (hierarchy) ----------
@@ -68,12 +96,26 @@ function mountPicker(el, o) {
 }
 
 // ---------- welcome / register ----------
-function welcome() {
-  $('#app').innerHTML = `<div class="card"><h2>Welcome 👋 Who are you?</h2>
-  <p class="meta">No passwords. Pick a role, choose your place in India's hierarchy, and start. Citizens are always anonymous to other citizens.</p>
-  <div class="roles"><div class="card role" onclick="register('citizen')"><div class="ic">🧑‍🤝‍🧑</div><h3>Citizen</h3><div class="meta">Report issues, upvote, discuss anonymously, track fixes.</div></div>
-  <div class="card role" onclick="register('authority')"><div class="ic">🏛️</div><h3>Authority</h3><div class="meta">Receive auto-routed issues for your jurisdiction and department, resolve with proof.</div></div></div>
-  <div class="sep"></div><div class="row"><span class="meta">Already have an ID?</span><input id="oldid" placeholder="e.g. CZ-1A2B3C" style="max-width:200px"><button class="btn" onclick="signin()">Continue</button></div></div>`;
+async function welcome() {
+  $('#app').innerHTML = `<section class="hero"><div class="hero-txt">
+   <span class="eyebrow">${ic('spark')} Gen AI civic triage · Team NeuroSync</span>
+   <h1>Complaints close only when <em>AI verifies the fix</em>.</h1>
+   <p class="lead">Report a civic issue with a photo. An AI agent checks it, scores severity, merges duplicates and routes it to the right authority. When they claim it's fixed, the AI compares before and after photos taken at the same spot, so fake closures can't hide.</p>
+   <div class="hero-stats" id="hstats"></div></div>
+   <div class="roles">
+    <button class="role" onclick="register('citizen')"><span class="ri">${ic('users')}</span><b>I'm a citizen</b><span>Report issues, upvote, track the fix</span></button>
+    <button class="role" onclick="register('authority')"><span class="ri">${ic('landmark')}</span><b>I'm an authority</b><span>Get routed issues, resolve with proof</span></button>
+    <div class="signin"><span class="meta">Already have an ID?</span><div class="row"><input id="oldid" placeholder="e.g. CZ-1A2B3C"><button class="btn" onclick="signin()">Continue</button></div></div>
+   </div></section>
+  <section class="how">
+   <div class="step"><span class="num">1</span><b>Snap & report</b><p>Photo and location. No password; you stay anonymous to other citizens.</p></div>
+   <div class="step"><span class="num">2</span><b>AI agent triages</b><p>Guardrail, vision, critic, geolocation, duplicate check and routing, with every step shown.</p></div>
+   <div class="step"><span class="num">3</span><b>AI verifies the fix</b><p>Before/after photo comparison plus a distance check. Claimed is not the same as verified.</p></div>
+  </section>`;
+  try {
+    const s = (await api('GET', '/api/dashboard?path=India')).summary;
+    if (page === 'welcome' && $('#hstats')) $('#hstats').innerHTML = `<div><b>${s.total}</b><span>issues reported</span></div><div><b>${s.claimed}</b><span>claimed fixed</span></div><div><b class="ok">${s.verified}</b><span>AI-verified fixed</span></div><div><b class="bad">${s.rejected}</b><span>false closure claims caught</span></div>`;
+  } catch (e) { /* stats are optional */ }
 }
 async function signin() {
   try { ME = await api('GET', '/api/users/' + $('#oldid').value.trim()); localStorage.setItem('uid', ME.id); nav('feed'); } catch (e) { toast(e.message); }
@@ -83,14 +125,15 @@ function register(role) {
   if (typeof role !== 'string') role = 'citizen';
   regState = { role, path: ['India'], ok: false, level: 3 };
   const au = role === 'authority';
-  $('#app').innerHTML = `<div class="card"><h2>${au ? '🏛 Register as Authority' : '🧑 Register as Citizen'}</h2>
+  $('#app').innerHTML = `<div class="narrow"><button class="back" onclick="nav('welcome')">← Back</button>
+  <div class="card form"><div class="formhead"><span class="ri">${ic(au ? 'landmark' : 'users')}</span><div><h2>${au ? 'Register as an authority' : 'Join as a citizen'}</h2><p class="meta">${au ? 'Issues in your jurisdiction and department are routed to you automatically.' : 'No password. Your ID is saved on this device; other citizens only see an anonymous name.'}</p></div></div>
   ${au ? `<label>Level of authority</label><select id="lvl">${H.levelNames.map((n, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${n} (${['India', 'State / UT', 'District', 'City / Block / ULB'][i]})</option>`).join('')}</select>
   <label>Department</label><select id="dept"><option value="all">All departments</option>${Object.entries(H.depts).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
   <label>Office name (optional)</label><input id="office" placeholder="Your office name, exactly as officially published">` : ''}
   <div id="pick"></div>
-  <label>Phone (10 digits)</label><input id="phone" inputmode="numeric" maxlength="14" placeholder="9876543210">
-  <label>Email</label><input id="email" type="email" placeholder="you@example.com">
-  <div class="row" style="margin-top:14px"><button class="btn" onclick="nav('welcome')">← Back</button><button class="btn pri" id="go" onclick="doRegister()">Create profile</button></div></div>`;
+  <div class="two"><div><label>Phone (10 digits)</label><input id="phone" inputmode="numeric" maxlength="14" placeholder="9876543210"></div>
+  <div><label>Email</label><input id="email" type="email" placeholder="you@example.com"></div></div>
+  <button class="btn pri lg block" id="go" onclick="doRegister()">Create profile</button></div></div>`;
   const mount = () => mountPicker($('#pick'), { min: au ? regState.level + 1 : 4, max: au ? regState.level + 1 : 5, initial: ['India'], onChange: (p, ok) => { regState.path = p; regState.ok = ok; } });
   if (au) { $('#lvl').onchange = e => { regState.level = +e.target.value; mount(); }; }
   mount();
@@ -151,20 +194,21 @@ function mountPinMap() {
 // ---------- feed ----------
 async function feed() {
   const cit = ME.role === 'citizen';
-  if (ME.suspended || (ME.suspendedUntil > Date.now())) { /* shown on profile and as banner */ }
-  $('#app').innerHTML = `<div class="card">
-  ${cit && ME.suspendedUntil > Date.now() ? `<div class="warn">⛔ Your account is suspended until ${new Date(ME.suspendedUntil).toLocaleString()} for repeated false reports. You can read but not post, vote or comment.</div>` : ''}
-  <div class="row"><h2 class="grow" style="margin:0">${cit ? '📰 Community feed' : '📥 Issue queue – ' + esc(ME.office)}</h2>
-  ${cit ? `<button class="btn pri" onclick="nav('report')">➕ Report issue</button>` : ''}</div>
-  <p class="meta">${cit ? `Showing issues ${useGps ? `within <b>${filters.radius} km</b> of your live location` : `in <b>${esc(ME.path.slice(-1)[0])}</b> (allow location access to see issues near you)`}. Reports circulate only around their location. ✓ "On-site" = upvoted by someone within ${H.config.confirmM} m (live GPS).` : `Jurisdiction: ${esc(ME.path.join(' › '))} · Dept: ${esc(ME.dept === 'all' ? 'All' : H.depts[ME.dept])}. Issues auto-escalate upward if the SLA lapses.`}</p>
-  <div class="row">
-   ${cit ? `<select id="f-rad">${[1, 2, 5, 10, 25].map(r => `<option value="${r}" ${filters.radius == r ? 'selected' : ''}>${r} km</option>`).join('')}</select>
-   <button class="btn ${useGps ? 'on' : ''}" onclick="toggleGps()">📍 ${useGps ? 'Using live GPS' : 'Use live GPS'}</button>` : `<select id="f-scope"><option value="mine">Assigned to my level</option><option value="all">Everything in jurisdiction</option><option value="removed">Removed (flagged) posts</option></select>`}
-   <select id="f-sort">${[['priority', 'Top priority'], ['votes', 'Most upvoted'], ['new', 'Newest'], ['old', 'Oldest']].map(([v, l]) => `<option value="${v}" ${filters.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-   <select id="f-st">${[['open', 'Unresolved'], ['', 'All'], ['resolved', 'Resolved'], ['in_progress', 'In progress']].map(([v, l]) => `<option value="${v}" ${filters.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-   <select id="f-cat"><option value="">All categories</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}" ${filters.cat === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
-   <input id="f-q" placeholder="Search…" value="${esc(filters.q)}" style="max-width:160px"></div><div id="fmap" class="map"></div>${legendHtml()}</div><div id="list"><div class="meta">Loading…</div></div>`;
-  ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || 5; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = $('#f-cat').value; loadList(); }; });
+  const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${v}" ${cur == v ? 'selected' : ''}>${l}</option>`).join('');
+  $('#app').innerHTML = `${cit && ME.suspendedUntil > Date.now() ? `<div class="warn">Your account is suspended until ${new Date(ME.suspendedUntil).toLocaleString()} for repeated false reports. You can read but not post, vote or comment.</div>` : ''}
+  <div class="pagehead"><div><h1>${cit ? (useGps ? 'Issues near you' : 'Community feed') : 'Issue queue'}</h1>
+   <p class="meta">${cit ? (useGps ? `Within ${filters.radius} km of your live location. "On-site" means upvoted by someone within ${H.config.confirmM} m.` : `In ${esc(ME.path.slice(-1)[0])}. Allow location access to see issues near you.`) : `${esc(ME.office)} · ${esc(ME.path.slice(1).join(' › '))} · ${esc(ME.dept === 'all' ? 'All departments' : H.depts[ME.dept])}. Issues escalate automatically when the SLA lapses.`}</p></div>
+   ${cit ? `<button class="btn pri lg" onclick="nav('report')">${ic('plus')} Report issue</button>` : ''}</div>
+  <div class="filters">
+   ${cit ? `<button class="pill ${useGps ? 'on' : ''}" onclick="toggleGps()">${ic('gps')} ${useGps ? 'Near me' : 'Use my location'}</button>${useGps ? `<select id="f-rad" class="pill">${opt([1, 2, 5, 10, 25].map(r => [r, r + ' km']), filters.radius)}</select>` : ''}`
+      : `<select id="f-scope" class="pill"><option value="mine">Assigned to my level</option><option value="all">Everything in jurisdiction</option><option value="removed">Removed (flagged) posts</option></select>`}
+   <select id="f-st" class="pill">${opt([['open', 'Unresolved'], ['', 'All statuses'], ['claimed', 'Claimed fixed'], ['resolved', 'AI-verified fixed'], ['in_progress', 'In progress']], filters.status)}</select>
+   <select id="f-sort" class="pill">${opt([['priority', 'Top priority'], ['votes', 'Most upvoted'], ['new', 'Newest'], ['old', 'Oldest']], filters.sort)}</select>
+   <select id="f-cat" class="pill"><option value="">All categories</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}" ${filters.cat === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
+   <label class="search">${ic('search')}<input id="f-q" placeholder="Search issues" value="${esc(filters.q)}"></label></div>
+  <div class="feed-grid"><div id="list"><div class="skel"></div><div class="skel"></div></div>
+   <aside class="side"><div class="card mapcard"><div id="fmap" class="map"></div>${legendHtml()}</div></aside></div>`;
+  ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || filters.radius; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = $('#f-cat').value; loadList(); }; });
   $('#f-q').oninput = e => { filters.q = e.target.value; clearTimeout(feed.t); feed.t = setTimeout(loadList, 300); };
   loadList();
   if (cit && !feed.asked) { feed.asked = true; curPos().then(p => { if (p && !useGps && page === 'feed') { useGps = true; feed(); } }); }
@@ -181,42 +225,47 @@ async function loadList() {
   try {
     const l = await api('GET', '/api/reports?' + p);
     showPins('fmap', l, cit && useGps && GPS ? GPS : null);
-    $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="card meta">No reports yet. ${cit ? 'Try a bigger radius, or be the first to report one.' : ''}</div>`;
-  } catch (e) { $('#list').innerHTML = `<div class="card warn">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
+    $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Try a bigger radius or other filters, or be the first to report an issue here.' : 'Nothing is waiting in this view.'}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} Report an issue</button>` : ''}</div>`;
+  } catch (e) { $('#list').innerHTML = `<div class="warn">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
 function mediaHtml(l) {
   if (!l.length) return '';
-  return `<div class="media">${l.map(m => m.type === 'image' ? `<img loading="lazy" src="${m.url}" onclick="window.open('${m.url}')">` : m.type === 'video' ? `<video src="${m.url}" controls preload="metadata"></video>` : `<audio src="${m.url}" controls></audio>`).join('')}</div>`;
+  return `<div class="media">${l.map(m => m.type === 'image' ? `<img loading="lazy" src="${m.url}" onclick="window.open('${m.url}')" alt="">` : m.type === 'video' ? `<video src="${m.url}" controls preload="metadata"></video>` : `<audio src="${m.url}" controls></audio>`).join('')}</div>`;
 }
+const VLABEL = { verified: 'AI-verified fixed', not_fixed: 'Not fixed', inconclusive: 'Inconclusive' };
 function card(r) {
   const cit = ME.role === 'citizen';
-  return `<div class="card" id="c-${r.id}">
-  <div class="row"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity}${r.sev ? ' · ' + r.sev + '/5' : ''}</span>${r.needsReview ? '<span class="chip st-claimed">👀 Needs human review</span>' : ''}<span class="chip st-${r.status}">${STAT[r.status]}</span>
-  ${r.confirmed ? `<span class="chip st-resolved">✓ ${r.confirmed} on-site</span>` : ''}${r.merged ? `<span class="chip">🔗 ${r.reporters} reports merged</span>` : ''}${r.removed ? '<span class="chip st-open">Removed</span>' : ''}
-  <span class="meta grow" style="text-align:right">${ago(r.createdAt)}</span></div>
-  <h3 style="margin-top:8px">${esc(r.caption)}</h3>
-  ${r.description ? `<div style="white-space:pre-wrap">${esc(r.description)}</div>` : ''}
-  ${r.media.length ? mediaHtml(r.media) : `<div class="ph">${ICON[r.category]}</div>`}
-  ${r.ai ? `<div class="meta">🤖 AI (${Math.round(r.ai.confidence * 100)}% confident): ${esc(r.ai.reasoning)}</div>` : ''}
-  <div class="meta">📍 ${esc(r.address || 'Pinned location')}${r.locSource ? ` · ${LOCSRC[r.locSource] || ''}` : ''}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}<br>
-  by <b>${esc(r.author)}</b>${r.mine ? ' (you)' : ''} · Routed to <b>${r.assignedName}</b> · ${r.deptSource ? `<a href="${esc(r.deptSource)}" target="_blank" rel="noopener">${esc(r.deptLabel)}</a>` : esc(r.deptLabel)} · SLA ${r.slaDays}d</div>
-  ${r.afterMedia.length ? `<div class="sep"></div><b>Before → After</b><div class="ba"><div>${mediaHtml(r.media.filter(m => m.type === 'image').slice(0, 1))}</div><div>${mediaHtml(r.afterMedia.slice(0, 1))}</div></div>` : ''}
-  ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">🤖 <b>${{ verified: 'VERIFIED FIXED', not_fixed: 'NOT FIXED', inconclusive: 'INCONCLUSIVE' }[r.verdict.result] || esc(r.verdict.result)}</b>${r.verdict.by === 'ai' ? ` · AI confidence ${Math.round(r.verdict.confidence * 100)}%` : ` · ${esc(r.verdict.by)}`}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from spot` : ''}<br>${esc(r.verdict.reason)}</div>` : ''}
-  ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="row" style="margin-top:6px"><span class="meta">Is it really fixed? 👍 ${r.resolutionVotes.ok} · 👎 ${r.resolutionVotes.bad}</span>
-    <button class="btn ${r.myResVote === true ? 'on' : ''}" onclick="resVote('${r.id}',true)">✔ Yes fixed</button><button class="btn ${r.myResVote === false ? 'on' : ''}" onclick="resVote('${r.id}',false)">✖ Not fixed</button></div>` : ''}
-  <div class="sep"></div>
-  <div class="row">
-   ${cit ? `<button class="btn ${r.voted ? 'on' : ''}" onclick="upvote('${r.id}')">▲ Upvote · ${r.votes}</button>` : `<span class="chip">▲ ${r.votes} upvotes</span>`}
-   <button class="btn" onclick="openThread('${r.id}')">💬 Messages · ${r.comments}</button>
-   <button class="btn" onclick="openTimeline('${r.id}')">🧠 Agent trace & timeline</button>
-   <span class="grow"></span>
-   ${cit && !r.mine && !r.flagged ? `<button class="btn danger" onclick="flag('${r.id}')">🚩 Report false</button>` : ''}${r.flagged ? '<span class="meta">flagged by you</span>' : ''}
-   ${!cit && r.status !== 'resolved' ? authActions(r) : ''}</div></div>`;
+  const img = r.media.find(m => m.type === 'image');
+  const dept = r.deptSource ? `<a href="${esc(r.deptSource)}" target="_blank" rel="noopener">${esc(r.deptLabel)}</a>` : esc(r.deptLabel);
+  return `<article class="rcard" id="c-${r.id}">
+  <div class="rmedia">${img ? `<img loading="lazy" src="${img.url}" onclick="window.open('${img.url}')" alt="Report photo">` : `<div class="ph">${ICON[r.category]}</div>`}
+   <span class="badge st-${r.status}">${STAT[r.status]}</span>${r.media.length > 1 ? `<span class="count">+${r.media.length - 1}</span>` : ''}</div>
+  <div class="rbody">
+   <div class="chips"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity}${r.sev ? ' · ' + r.sev + '/5' : ''}</span>${r.needsReview ? '<span class="chip st-claimed">Needs human review</span>' : ''}${r.confirmed ? `<span class="chip st-resolved">✓ ${r.confirmed} on-site</span>` : ''}${r.merged ? `<span class="chip">${r.reporters} reports merged</span>` : ''}${r.removed ? '<span class="chip st-open">Removed</span>' : ''}</div>
+   <h3>${esc(r.caption)}</h3>
+   ${r.description ? `<p class="desc">${esc(r.description)}</p>` : ''}
+   ${r.ai ? `<div class="insight">${ic('spark')}<div><b>AI triage · ${Math.round(r.ai.confidence * 100)}% confident</b><span>${esc(r.ai.reasoning)}</span></div></div>` : ''}
+   <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}${r.locSource ? ` · ${LOCSRC[r.locSource] || ''}` : ''}</span>
+    <span>${ic('landmark')}${r.assignedName} authority · ${dept} · SLA ${r.slaDays} days</span>
+    <span>${ic('clock')}${ago(r.createdAt)} · ${esc(r.author)}${r.mine ? ' (you)' : ''}</span></div>
+   ${r.afterMedia.length ? `<div class="ba"><figure>${img ? `<img src="${img.url}" alt="">` : ''}<figcaption>Before</figcaption></figure><figure><img src="${r.afterMedia[0].url}" alt=""><figcaption>After</figcaption></figure></div>` : ''}
+   ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">${ic(r.verdict.result === 'verified' ? 'check' : 'spark')}<div><b>${VLABEL[r.verdict.result] || esc(r.verdict.result)}</b><span class="vmeta">${r.verdict.by === 'ai' ? `AI confidence ${Math.round(r.verdict.confidence * 100)}%` : esc(r.verdict.by)}${r.verdict.distanceM != null ? ` · after-photo ${r.verdict.distanceM} m from spot` : ''}</span><span>${esc(r.verdict.reason)}</span></div></div>` : ''}
+   ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="confirm"><span>Is it really fixed? 👍 ${r.resolutionVotes.ok} · 👎 ${r.resolutionVotes.bad}</span>
+    <button class="btn sm ${r.myResVote === true ? 'on' : ''}" onclick="resVote('${r.id}',true)">Yes, fixed</button><button class="btn sm ${r.myResVote === false ? 'on' : ''}" onclick="resVote('${r.id}',false)">Not fixed</button></div>` : ''}
+   <div class="actions">
+    ${cit ? `<button class="ghost ${r.voted ? 'on' : ''}" onclick="upvote('${r.id}')" title="Upvote">${ic('up')}${r.votes}</button>` : `<span class="ghost">${ic('up')}${r.votes}</span>`}
+    <button class="ghost" onclick="openThread('${r.id}')" title="Messages">${ic('msg')}${r.comments}</button>
+    <button class="ghost" onclick="openTimeline('${r.id}')">${ic('spark')}Agent trace</button>
+    <span class="grow"></span>
+    ${cit && !r.mine && !r.flagged ? `<button class="ghost danger" onclick="flag('${r.id}')" title="Report as false">${ic('flag')}</button>` : ''}${r.flagged ? '<span class="meta">flagged by you</span>' : ''}
+   </div>
+   ${!cit && r.status !== 'resolved' ? `<div class="authbar">${authActions(r)}</div>` : ''}
+  </div></article>`;
 }
 function authActions(r) {
   return `${r.status === 'open' || r.status === 'reopened' ? `<button class="btn" onclick="act('${r.id}','acknowledge')">Acknowledge</button>` : ''}
   ${r.status !== 'in_progress' ? `<button class="btn" onclick="act('${r.id}','start')">Start work</button>` : ''}
-  <button class="btn pri" onclick="resolveDialog('${r.id}')">Resolve + after-photo</button>`;
+  <button class="btn pri" onclick="resolveDialog('${r.id}')">${ic('camera')} Resolve with after-photo</button>`;
 }
 async function upvote(id) {
   const body = { user: ME.id };
@@ -232,13 +281,13 @@ async function resVote(id, ok) { try { await api('POST', `/api/reports/${id}/com
 async function act(id, action) { try { await api('POST', `/api/reports/${id}/status`, { user: ME.id, action }); toast('Updated'); loadList(); } catch (e) { toast(e.message); } }
 async function openTimeline(id) {
   const r = await api('GET', `/api/reports/${id}?user=${ME.id}`);
-  modal(`<h3>🧠 ${esc(r.caption)}</h3>${r.needsReview ? `<div class="warn">👀 Needs human review: ${esc(r.reviewWhy.join('; '))}</div>` : ''}
+  modal(`<h3>${esc(r.caption)}</h3><div class="chips" style="margin-bottom:8px"><span class="chip">${ICON[r.category]} ${esc(r.categoryLabel)}</span><span class="chip sev-${r.severity}">${r.severity}${r.sev ? ' · ' + r.sev + '/5' : ''}</span><span class="chip st-${r.status}">${STAT[r.status]}</span></div>${r.needsReview ? `<div class="warn">👀 Needs human review: ${esc(r.reviewWhy.join('; '))}</div>` : ''}
   ${r.ai && r.ai.evidence && r.ai.evidence.length ? `<div class="meta"><b>Visual evidence:</b> ${r.ai.evidence.map(esc).join(' · ')}</div>` : ''}
   ${traceHtml(r.trace)}
   ${r.verdict && r.verdict.evidence && r.verdict.evidence.length ? `<div class="meta"><b>Fix verification evidence${r.verdict.model ? ' (' + esc(r.verdict.model) + ')' : ''}:</b> ${r.verdict.evidence.map(esc).join(' · ')}</div>` : ''}
   ${r.geo ? `<div class="meta">Address source: ${esc(r.geo.source)}, fetched ${new Date(r.geo.t).toLocaleString()}</div>` : ''}
-  <h3 style="margin-top:12px">🕒 Timeline</h3><div class="tl">${r.timeline.map(t => `<div><b>${new Date(t.t).toLocaleString()}</b> – ${esc(t.text)}</div>`).join('')}</div>
-  <button class="btn" style="margin-top:10px" onclick="closeModal()">Close</button>`);
+  <h3 style="margin-top:14px">Timeline</h3><div class="tl">${r.timeline.map(t => `<div><b>${new Date(t.t).toLocaleString()}</b> – ${esc(t.text)}</div>`).join('')}</div>
+`);
 }
 async function openThread(id) {
   const r = await api('GET', `/api/reports/${id}?user=${ME.id}`);
@@ -321,19 +370,22 @@ function setRpos(p, source, label) {
 function report() {
   if (ME.role !== 'citizen') return nav('feed');
   pending = []; rpos = null;
-  $('#app').innerHTML = `<div class="card"><h2>➕ Report a civic issue</h2>
-  <p class="meta">Posted anonymously. An AI agent checks the photo, classifies the issue, scores severity, finds duplicates within 150 m and routes it. You will see every step.</p>
-  <label>Photos (at least 1) / video / audio, up to 8 *</label><input type="file" accept="image/*,video/*,audio/*" multiple onchange="addFiles(this)">
-  <div class="meta" id="mhint">0/8 files · a photo with GPS sets the location automatically</div><div class="media" id="prev"></div>
-  <label>Caption *</label><input id="r-cap" maxlength="140" placeholder="One line: what's wrong?">
-  <label>Description</label><textarea id="r-desc" rows="3" maxlength="1000" placeholder="Details: how long, who is affected, any danger…"></textarea>
-  <label>Category</label><select id="r-cat"><option value="">🤖 Let the AI decide</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}">${ICON[k]} ${esc(c.label)}</option>`).join('')}</select>
-  <label>Location *</label>
-  <div class="meta" id="r-loc">Not set yet. Allow location access, add a photo with GPS, drop a pin on the map, or search an address.</div>
-  <div class="row" style="margin-top:6px"><button class="btn" onclick="pinGps()">📍 Use my location</button>
-   <input id="r-addr" class="grow" maxlength="200" placeholder="Address / landmark (optional, or search it)"><button class="btn" onclick="findAddr()">🔎 Find</button></div>
-  <div id="r-results"></div><div id="r-map" class="map small"></div>
-  <div class="row" style="margin-top:12px"><button class="btn" onclick="nav('feed')">Cancel</button><button class="btn pri" id="r-go" onclick="submitReport()">Submit to AI agent</button></div></div>`;
+  $('#app').innerHTML = `<div class="narrow"><div class="pagehead"><div><h1>Report an issue</h1><p class="meta">An AI agent checks, classifies, scores and routes your report. You'll see every step it takes.</p></div></div>
+  <div class="card form">
+   <div class="fstep"><span class="num">1</span><div class="grow"><b>Add a photo</b><p class="meta">At least one photo. A photo with GPS sets the location automatically.</p>
+    <label class="drop">${ic('camera')}<span>Take or choose photos</span><small>Up to 8 files · video and audio also accepted</small><input type="file" accept="image/*,video/*,audio/*" multiple onchange="addFiles(this)"></label>
+    <div class="meta" id="mhint"></div><div class="media" id="prev"></div></div></div>
+   <div class="fstep"><span class="num">2</span><div class="grow"><b>Describe it</b>
+    <label>Caption *</label><input id="r-cap" maxlength="140" placeholder="One line: what's wrong?">
+    <label>Details</label><textarea id="r-desc" rows="3" maxlength="1000" placeholder="How long has it been like this? Who is affected? Any danger?"></textarea>
+    <label>Category</label><select id="r-cat"><option value="">✨ Let the AI decide</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}">${ICON[k]} ${esc(c.label)}</option>`).join('')}</select></div></div>
+   <div class="fstep"><span class="num">3</span><div class="grow"><b>Where is it?</b>
+    <div class="locbox" id="r-loc">Not set yet. Allow location access, add a photo with GPS, drop a pin on the map, or search an address.</div>
+    <div class="row locrow"><button class="btn" onclick="pinGps()">${ic('gps')} Use my location</button>
+     <label class="search grow">${ic('search')}<input id="r-addr" maxlength="200" placeholder="Search address or landmark" onkeydown="if(event.key==='Enter')findAddr()"></label><button class="btn" onclick="findAddr()">Find</button></div>
+    <div id="r-results"></div><div id="r-map" class="map small"></div></div></div>
+   <div class="formfoot"><button class="btn" onclick="nav('feed')">Cancel</button><button class="btn pri lg" id="r-go" onclick="submitReport()">${ic('spark')} Submit to AI agent</button></div>
+  </div></div>`;
   if (window.mountPinMap) mountPinMap();
   getGps().then(p => { if (p && !rpos && page === 'report') { GPS = p; setRpos(p, 'gps'); } });
 }
@@ -345,29 +397,29 @@ async function findAddr() {
     const r = await api('GET', '/api/geocode?q=' + encodeURIComponent(q));
     if (!r.results.length) { $('#r-results').innerHTML = '<div class="meta">No match. Try a nearby landmark, or drop a pin on the map.</div>'; return; }
     window._geo = r.results;
-    $('#r-results').innerHTML = r.results.map((x, i) => `<div class="pick" onclick="pickAddr(${i})">📍 ${esc(x.display)}</div>`).join('') + `<div class="meta">Source: ${esc(r.source)}</div>`;
+    $('#r-results').innerHTML = r.results.map((x, i) => `<div class="pick" onclick="pickAddr(${i})">${ic('pin')}<span>${esc(x.display)}</span></div>`).join('') + `<div class="meta">Source: ${esc(r.source)}</div>`;
   } catch (e) { $('#r-results').innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
 }
 function pickAddr(i) { const x = window._geo[i]; setRpos(x, 'manual', x.display); $('#r-results').innerHTML = ''; }
 function traceHtml(trace) {
   if (!trace || !trace.length) return '';
-  const ic = { ok: '✅', warn: '⚠️', fail: '❌', rejected: '⛔', skipped: '⏭️' };
-  return `<div class="trace"><b>🧠 Agent trace</b>${trace.map((t, i) => `<div class="tstep ts-${t.status}"><div class="row"><b>${i + 1}. ${esc(t.step)}</b><span>${ic[t.status] || ''} ${esc(t.status)}</span><span class="meta grow" style="text-align:right">${t.ms != null ? (t.ms / 1000).toFixed(1) + 's' : ''}${t.source ? ' · ' + esc(t.source) : ''}</span></div><div>${esc(t.output)}</div></div>`).join('')}</div>`;
+  const lab = { ok: 'done', warn: 'warning', fail: 'failed', rejected: 'rejected', skipped: 'skipped' };
+  return `<div class="trace"><div class="trace-h">${ic('spark')}<b>Agent trace</b><span class="meta">${trace.length} steps</span></div><ol>${trace.map(t => `<li class="ts-${t.status}"><div class="th"><b>${esc(t.step)}</b><span class="tstat">${lab[t.status] || esc(t.status)}</span><span class="tsrc">${t.ms != null ? (t.ms / 1000).toFixed(1) + 's' : ''}${t.source ? ' · ' + esc(t.source) : ''}</span></div><p>${esc(t.output)}</p></li>`).join('')}</ol></div>`;
 }
 async function submitReport() {
   if (!pending.some(m => m.type === 'image')) return toast('Add at least one photo');
   if (!rpos) return toast('Set the location first (GPS, photo GPS, map pin or address search)');
   const b = { user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
   $('#r-go').disabled = true;
-  modal(`<h3>🤖 AI agent is working…</h3><div class="meta">guardrail → perceive → critic → geolocate → dedupe → route → publish</div><div class="spinner"></div>`);
+  modal(`<h3>AI agent is working…</h3><div class="spinner"></div><p class="meta" style="text-align:center">guardrail → perceive → critic → geolocate → dedupe → route → publish<br>This usually takes 5–20 seconds.</p>`);
   try {
     const r = await api('POST', '/api/reports', b);
     const rep = r.report;
-    modal(`<h3>${r.merged ? '🔗 Merged with an existing report' : '✅ Report published'}</h3>
+    modal(`<h3>${r.merged ? 'Merged with an existing report' : 'Report published'}</h3>
     <p>${r.merged ? `Someone nearby already reported this. Your report and photos were <b>merged</b> into it (${rep.reporters} reports combined), raising its priority.` : rep.sev ? `AI triage: <b>${esc(rep.categoryLabel)}</b>, <span class="chip sev-${rep.severity}">${rep.severity} · ${rep.sev}/5</span>, SLA ${rep.slaDays} days, routed to the <b>${rep.assignedName}</b> authority (${esc(rep.deptLabel)}).` : `The AI could not triage this confidently, so it is queued for <b>human review</b>.`}</p>
-    ${traceHtml(r.trace)}<button class="btn pri" onclick="closeModal();nav('feed')">Go to feed</button>`);
+    ${traceHtml(r.trace)}<button class="btn pri lg block" onclick="closeModal();nav('feed')">Go to feed</button>`);
   } catch (e) {
-    modal(`<h3>⛔ Not published</h3><p>${esc(e.message)}</p>${traceHtml(e.data && e.data.trace)}<button class="btn" onclick="closeModal()">Back to the form</button>`);
+    modal(`<h3>Not published</h3><p>${esc(e.message)}</p>${traceHtml(e.data && e.data.trace)}<button class="btn" onclick="closeModal()">Back to the form</button>`);
     $('#r-go').disabled = false;
   }
 }
@@ -404,15 +456,15 @@ async function profile() {
   const cit = ME.role === 'citizen', loc = ME.path.slice(1);
   const rev = loc.slice().reverse().concat('India').join(', ').replace(/, India, India$/, ', India');
   const mine = cit ? (await api('GET', `/api/reports?user=${ME.id}&radius=100&status=&sort=new`)).filter(r => r.mine) : [];
-  $('#app').innerHTML = `<div class="card"><div class="idcard"><div class="avatar">${cit ? '🧑' : '🏛'}</div><div><h2 style="margin:0">${esc(ME.id)}</h2>
-  <div class="meta">${cit ? 'Citizen' : esc(ME.office)} · 📞 ${esc(ME.phone)} · ✉️ ${esc(ME.email)}</div>${!cit ? `<div class="meta">${H.levelNames[ME.level]} level · ${esc(ME.dept === 'all' ? 'All departments' : H.depts[ME.dept])}</div>` : ''}</div></div>
-  <div class="sep"></div>
-  ${cit ? `<div class="pledge">I, <b>${esc(ME.id)}</b>, pledge to be a sincere and active citizen of ${esc(rev)}. I will report only what I have truly seen, help my neighbours confirm real problems, and never spread false information.</div>`
-      : `<div class="pledge">We, <b>${esc(ME.office)}</b>, pledge to serve the people of ${esc(rev)} with transparency – acknowledging every issue, fixing it on time and proving it with photographs.</div>`}
-  ${cit ? `<div class="tiles" style="margin-top:12px"><div class="tile"><b>${ME.stats.reports}</b><span>Reports</span></div><div class="tile"><b>${ME.stats.resolved}</b><span>Resolved</span></div><div class="tile"><b>${ME.stats.upvotes}</b><span>Upvotes received</span></div><div class="tile"><b>${ME.strikes}</b><span>Strikes</span></div></div>
-  ${ME.suspendedUntil > Date.now() ? `<div class="warn">⛔ Suspended until ${new Date(ME.suspendedUntil).toLocaleString()}</div>` : ''}` : ''}
-  <div class="sep"></div><button class="btn danger" onclick="signout()">Sign out (forget this device)</button> <span class="meta">Keep your ID to come back: <b>${esc(ME.id)}</b></span></div>
-  ${cit ? `<h3>My reports</h3>${mine.map(card).join('') || '<div class="card meta">You have not reported anything yet.</div>'}` : ''}`;
+  $('#app').innerHTML = `<div class="narrow"><div class="card profile"><div class="idcard"><div class="avatar">${ic(cit ? 'user' : 'landmark')}</div><div class="grow"><h2>${esc(ME.id)}</h2>
+   <div class="meta">${cit ? 'Citizen' : esc(ME.office)} · ${esc(loc.join(' › '))}</div>${!cit ? `<div class="meta">${H.levelNames[ME.level]} level · ${esc(ME.dept === 'all' ? 'All departments' : H.depts[ME.dept])}</div>` : ''}</div>
+   <button class="btn sm" onclick="signout()">${ic('logout')} Sign out</button></div>
+  ${cit ? `<div class="tiles"><div class="tile"><b>${ME.stats.reports}</b><span>Reports</span></div><div class="tile"><b class="ok">${ME.stats.resolved}</b><span>AI-verified fixed</span></div><div class="tile"><b>${ME.stats.upvotes}</b><span>Upvotes received</span></div><div class="tile"><b>${ME.strikes}</b><span>Strikes</span></div></div>
+  ${ME.suspendedUntil > Date.now() ? `<div class="warn">Suspended until ${new Date(ME.suspendedUntil).toLocaleString()}</div>` : ''}` : ''}
+  <div class="pledge">${cit ? `I, <b>${esc(ME.id)}</b>, pledge to be a sincere and active citizen of ${esc(rev)}. I will report only what I have truly seen, help my neighbours confirm real problems, and never spread false information.`
+      : `We, <b>${esc(ME.office)}</b>, pledge to serve the people of ${esc(rev)} with transparency: acknowledging every issue, fixing it on time and proving it with photographs.`}</div>
+  <p class="meta">Contact (private): ${esc(ME.phone)} · ${esc(ME.email)}. Keep your ID <b>${esc(ME.id)}</b> to sign in on another device.</p></div>
+  ${cit ? `<h2 class="sec">My reports</h2>${mine.map(card).join('') || `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>Issues you report will appear here with their AI triage and fix status.</span></div>`}` : ''}</div>`;
 }
 function signout() { localStorage.removeItem('uid'); ME = null; nav('welcome'); }
 
@@ -421,14 +473,14 @@ let dpath = null, ddepth = 0;
 async function dashboardPage() {
   dashboardPage.init = false;
   if (!dpath) dpath = ME.role === 'authority' ? ME.path.slice() : ME.path.slice(0, 3);
-  $('#app').innerHTML = `<div class="card"><h2>📊 ${ME.role === 'authority' ? 'Performance dashboard' : 'Public accountability dashboard'}</h2>
-  <p class="meta">Choose any level to see how authorities are performing there. <b>Claimed</b> = the department said it is fixed. <b>AI-verified</b> = the AI compared before/after photos and confirmed the fix at the same spot. Performance = 50% verified-fix rate + 30% share of issues within SLA + 20% speed.</p>
-  <div id="dpick"></div><label>Rank by level</label><select id="ddepth" style="max-width:260px"></select></div><div id="dbody">Loading…</div>`;
+  $('#app').innerHTML = `<div class="pagehead"><div><h1>${ME.role === 'authority' ? 'Performance' : 'Accountability dashboard'}</h1>
+   <p class="meta"><b>Claimed</b> = the department says it is fixed. <b>AI-verified</b> = the AI compared before/after photos and confirmed the fix at the same spot. The gap between them is where fake closures hide.</p></div></div>
+  <div class="card scope"><div id="dpick" class="pickrow"></div><div><label>Rank by</label><select id="ddepth"></select></div></div><div id="dbody"><div class="skel"></div></div>`;
   mountPicker($('#dpick'), { min: 1, max: 5, initial: dpath, onChange: (p) => { const changed = p.join() !== dpath.join(); dpath = p; if (changed || !dashboardPage.init) { dashboardPage.init = true; fillDepth(); loadDash(); } } });
   $('#ddepth').onchange = e => { ddepth = +e.target.value; loadDash(); };
 }
 function fillDepth() {
-  const opts = []; for (let d = dpath.length + 1; d <= 5; d++) opts.push(`<option value="${d}" ${ddepth === d ? 'selected' : ''}>${H.levels[d - 1 + 0] ? ['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d - 1] : ''}</option>`);
+  const opts = []; for (let d = dpath.length + 1; d <= 5; d++) opts.push(`<option value="${d}" ${ddepth === d ? 'selected' : ''}>${['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d - 1]}</option>`);
   if (!opts.length) opts.push('<option value="5">—</option>');
   if (ddepth < dpath.length + 1 || ddepth > 5) ddepth = dpath.length + 1;
   $('#ddepth').innerHTML = opts.join('');
@@ -436,16 +488,22 @@ function fillDepth() {
 }
 async function loadDash() {
   const d = await api('GET', `/api/dashboard?path=${encodeURIComponent(dpath.join('|'))}&depth=${ddepth || ''}`);
-  const s = d.summary, mine = ME.path.join('>');
-  $('#dbody').innerHTML = `<div class="card"><h3>🗺️ Issues map</h3><div id="dmap" class="map"></div>${legendHtml()}</div><div class="tiles">
-  <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b style="color:var(--ok)">${s.resolved}</b><span>AI-verified fixed</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div>
-  <div class="tile"><b>${s.inProgress}</b><span>In progress</span></div><div class="tile"><b style="color:var(--bad)">${s.overdue}</b><span>Past SLA</span></div><div class="tile"><b>${s.critical}</b><span>Critical open</span></div>
-  <div class="tile"><b>${s.claimedRate}%</b><span>Claimed closure rate</span></div><div class="tile"><b style="color:var(--ok)">${s.verifiedRate}%</b><span>AI-verified closure rate</span></div><div class="tile"><b style="color:var(--bad)">${s.rejected}</b><span>Closure claims rejected by AI</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
-  <div class="card"><h3>🏆 Ranking – ${['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d.depth - 1]} under ${esc(d.path.join(' › '))}</h3>
-  ${d.ranking.length ? `<table><tr><th>#</th><th>Area</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th><th>Avg days</th></tr>${d.ranking.map(x => `<tr class="${mine.startsWith(x.path.join('>')) ? 'me' : ''}"><td>${x.rank}</td><td><b>${esc(x.name)}</b>${x.trail ? `<div class="meta">${esc(x.trail)}</div>` : ''}${mine.startsWith(x.path.join('>')) ? ' <span class="chip">your area</span>' : ''}</td>
-  <td style="min-width:90px"><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
-  <div class="card"><h3>🏢 Department-wise: claimed vs AI-verified closures</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Claimed fixed</th><th>AI-verified</th><th>Gap</th><th>Rejected by AI</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td>${x.claimed}/${x.total} <span class="meta">(${x.claimedRate}%)</span></td><td><b style="color:var(--ok)">${x.verified}/${x.total}</b> <span class="meta">(${x.verifiedRate}%)</span><div class="bar"><i style="width:${x.verifiedRate}%"></i></div></td><td>${Math.max(0, x.claimedRate - x.verifiedRate)} pts</td><td>${x.rejected}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
-  <div class="card"><h3>🧩 By issue type</h3>${d.cats.length ? `<table><tr><th>Type</th><th>Total</th><th>Resolved</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>`;
+  const s = d.summary, mine = ME.path.join('>'), gap = Math.max(0, s.claimedRate - s.verifiedRate);
+  const tw = html => `<div class="tablewrap"><table>${html}</table></div>`;
+  $('#dbody').innerHTML = `<div class="dash-top"><div class="card truth">
+    <h3>Claimed vs AI-verified closures</h3><p class="meta">${esc(d.path.join(' › '))} · ${s.total} issue${s.total === 1 ? '' : 's'}</p>
+    <div class="cmp"><div class="cmprow"><span>Claimed fixed</span><div class="bar big"><i style="width:${s.claimedRate}%"></i></div><b>${s.claimedRate}%</b></div>
+     <div class="cmprow"><span>AI-verified</span><div class="bar big ok"><i style="width:${s.verifiedRate}%"></i></div><b class="ok">${s.verifiedRate}%</b></div></div>
+    <div class="gap"><div><b class="${gap ? 'bad' : ''}">${gap} pts</b><span>verification gap</span></div><div><b class="bad">${s.rejected}</b><span>closure claims rejected by AI</span></div><div><b>${s.needsReview || 0}</b><span>in human review</span></div></div></div>
+   <div class="card mapcard"><div id="dmap" class="map"></div>${legendHtml()}</div></div>
+  <div class="tiles">
+   <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div><div class="tile"><b>${s.inProgress}</b><span>In progress</span></div>
+   <div class="tile"><b class="bad">${s.overdue}</b><span>Past SLA</span></div><div class="tile"><b class="bad">${s.critical}</b><span>Critical open</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to verified fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
+  <div class="card"><h3>Departments: claimed vs AI-verified</h3>${d.depts.length ? tw(`<tr><th>Department</th><th>Claimed fixed</th><th>AI-verified</th><th>Gap</th><th>Rejected by AI</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td><b>${esc(x.label)}</b></td><td>${x.claimed}/${x.total} <span class="meta">${x.claimedRate}%</span></td><td><b class="ok">${x.verified}/${x.total}</b> <span class="meta">${x.verifiedRate}%</span><div class="bar ok"><i style="width:${x.verifiedRate}%"></i></div></td><td>${Math.max(0, x.claimedRate - x.verifiedRate)} pts</td><td>${x.rejected}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}`) : '<div class="meta">No reports yet.</div>'}</div>
+  <div class="card"><h3>Ranking · ${['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d.depth - 1]}</h3><p class="meta">Performance = 50% verified-fix rate + 30% share within SLA + 20% speed.</p>
+  ${d.ranking.length ? tw(`<tr><th>#</th><th>Area</th><th>Performance</th><th>Verified</th><th>Left</th><th>Past SLA</th><th>Avg days</th></tr>${d.ranking.map(x => `<tr class="${mine.startsWith(x.path.join('>')) ? 'me' : ''}"><td>${x.rank}</td><td><b>${esc(x.name)}</b>${x.trail ? `<div class="meta">${esc(x.trail)}</div>` : ''}${mine.startsWith(x.path.join('>')) ? ' <span class="chip">your area</span>' : ''}</td>
+  <td style="min-width:100px"><b>${x.perf ?? '–'}</b><div class="bar"><i style="width:${x.perf || 0}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}`) : '<div class="meta">No reports yet.</div>'}</div>
+  <div class="card"><h3>By issue type</h3>${d.cats.length ? tw(`<tr><th>Type</th><th>Total</th><th>AI-verified</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}`) : '<div class="meta">No reports yet.</div>'}</div>`;
   showPins('dmap', d.points || [], GPS);
 }
 window.nav = nav;

@@ -4,7 +4,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const api = async (m, u, b) => {
   const r = await fetch(u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { data: j });
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { data: j, status: r.status });
   return j;
 };
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('show'), 3500); }
@@ -15,14 +15,44 @@ const STAT = { open: 'Open', acknowledged: 'Acknowledged', in_progress: 'In prog
 let H, ME, page, GPS = null, useGps = false, filters = { radius: 5, sort: 'priority', status: 'open', cat: '', q: '' };
 
 // ---------- boot ----------
+function fatal(msg) { $('#top').innerHTML = ''; $('#app').innerHTML = `<div class="narrow" style="margin-top:60px"><div class="empty">${ic('alert')}<b>Service unavailable</b><span>${esc(msg)}</span><button class="btn" onclick="location.reload()">Reload</button></div></div>`; }
 (async function () {
-  H = await api('GET', '/api/hierarchy');
+  try { H = await api('GET', '/api/hierarchy'); } catch (e) { return fatal('Could not reach the server. Check your connection and reload.'); }
+  const h = await api('GET', '/api/health').catch(() => null);
+  if (h && h.storage === 'setup-required') return fatal(h.message || 'The database is not set up yet.');
   const id = localStorage.getItem('uid');
-  if (id) { try { ME = await api('GET', '/api/users/' + id); } catch (e) { localStorage.removeItem('uid'); } }
+  if (id) {
+    try { ME = await api('GET', '/api/users/' + id); }
+    catch (e) { if (e.status === 404) localStorage.removeItem('uid'); else return fatal(e.message); }
+  }
   nav(ME ? 'feed' : 'welcome');
+  if (ME) resumeUpload();
 })();
 
-function nav(p) { page = p; renderTop(); ({ welcome, register, feed, report, profile, dashboardPage, notices })[p](); window.scrollTo(0, 0); }
+function nav(p) { page = p; killScroll(); renderTop(); ({ welcome, register, feed, report, profile, dashboardPage, notices })[p](); window.scrollTo(0, 0); animIn('#app > *'); }
+// ---------- motion (GSAP + ScrollTrigger) ----------
+// Skipped automatically when GSAP failed to load or the user prefers reduced motion; the app works the same without it.
+const REDUCED = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+const G = () => (!REDUCED && window.gsap) ? window.gsap : null;
+if (window.gsap && window.ScrollTrigger) gsap.registerPlugin(ScrollTrigger);
+function killScroll() { if (window.ScrollTrigger) ScrollTrigger.getAll().forEach(t => t.kill()); }
+function animIn(sel, opts) { const g = G(), els = document.querySelectorAll(sel); if (!g || !els.length) return; g.from(els, { y: 12, opacity: 0, duration: .4, stagger: .05, ease: 'power2.out', clearProps: 'transform,opacity', ...opts }); }
+function revealOnScroll(sel) {
+  const g = G(); if (!g || !window.ScrollTrigger) return;
+  ScrollTrigger.batch(sel, { start: 'top 92%', once: true, onEnter: b => g.from(b, { y: 18, opacity: 0, duration: .5, stagger: .08, ease: 'power2.out', clearProps: 'transform,opacity' }) });
+}
+function countUp(root) {
+  const g = G();
+  (typeof root === 'string' ? document.querySelector(root) : root || document)?.querySelectorAll('[data-count]').forEach(el => {
+    const end = +el.dataset.count, suf = el.dataset.suffix || '';
+    if (!g || !isFinite(end) || end === 0) { el.textContent = (isFinite(end) ? end : '–') + suf; return; }
+    const o = { v: 0 }; el.textContent = '0' + suf;
+    g.to(o, { v: end, duration: .9, ease: 'power2.out', onUpdate: () => { el.textContent = Math.round(o.v) + suf; }, ...(window.ScrollTrigger ? { scrollTrigger: { trigger: el, start: 'top 98%', once: true } } : {}) });
+  });
+}
+function animBars(sel) { const g = G(); if (!g) return; document.querySelectorAll(sel).forEach(i => g.from(i, { width: 0, duration: .9, ease: 'power3.out', delay: .1 })); }
+function bounce(sel) { const g = G(), el = document.querySelector(sel); if (!g || !el) return; g.fromTo(el, { y: 0 }, { y: -5, duration: .16, yoyo: true, repeat: 1, ease: 'power1.out' }); }
+
 // ---------- icons (inline SVG) ----------
 const ICP = {
   home: '<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
@@ -57,12 +87,13 @@ const ic = n => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="current
 let themePref = null; try { themePref = localStorage.getItem('theme'); } catch (e) { }
 const sysDark = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
 function applyTheme() { document.documentElement.dataset.theme = themePref || (sysDark && sysDark.matches ? 'dark' : 'light'); }
-if (sysDark && sysDark.addEventListener) sysDark.addEventListener('change', () => { if (!themePref) applyTheme(); });
+if (sysDark && sysDark.addEventListener) sysDark.addEventListener('change', () => { if (!themePref) { applyTheme(); renderTop(); retheme(); } });
 applyTheme();
 function toggleTheme() {
   themePref = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem('theme', themePref); } catch (e) { }
-  applyTheme(); renderTop();
+  applyTheme(); renderTop(); if (typeof retheme === 'function') retheme();
+  const g = G(); if (g) g.from('.iconbtn .ic', { rotate: -90, scale: .6, opacity: 0, duration: .4, ease: 'back.out(2)' });
 }
 // sorted option lists (alphabetical; "Other" last)
 const catsSorted = () => Object.entries(H.cats).sort((a, b) => a[0] === 'other' ? 1 : b[0] === 'other' ? -1 : a[1].label.localeCompare(b[1].label));
@@ -118,7 +149,7 @@ async function welcome() {
    <h1>Every complaint closed with proof.</h1>
    <p class="lead">Citizens report issues with a photo. An AI agent checks, classifies and routes each report to the responsible authority. A complaint counts as fixed only after the AI matches before and after photos taken at the same spot.</p>
    <div class="cta"><button class="btn pri lg" onclick="register('citizen')">Report an issue ${ic('arrow')}</button><button class="btn lg" onclick="register('authority')">Register as authority</button></div>
-   <div class="signin"><span>Have an ID?</span><input id="oldid" placeholder="CZ-1A2B3C" aria-label="Your ID"><button class="btn" onclick="signin()">Sign in</button></div>
+   <div class="signin"><span>Have an ID?</span><input id="oldid" placeholder="CZ-1A2B3C" aria-label="Your ID" onkeydown="if(event.key==='Enter')signin()"><button class="btn" onclick="signin()">Sign in</button><button class="linkbtn" onclick="aadhaarLogin()">Forgot your ID?</button></div>
   </section>
   <section class="stats" id="hstats"></section>
   <section class="how">
@@ -128,8 +159,9 @@ async function welcome() {
   </section>`;
   try {
     const s = (await api('GET', '/api/dashboard?path=India')).summary;
-    if (page === 'welcome' && $('#hstats')) $('#hstats').innerHTML = `<div><b class="mono">${s.total}</b><span>Issues reported</span></div><div><b class="mono">${s.claimed}</b><span>Claimed fixed</span></div><div><b class="mono">${s.verified}</b><span>Verified fixed</span></div><div><b class="mono">${s.rejected}</b><span>False closures caught</span></div>`;
+    if (page === 'welcome' && $('#hstats')) { $('#hstats').innerHTML = `<div><b class="mono" data-count="${s.total}">${s.total}</b><span>Issues reported</span></div><div><b class="mono" data-count="${s.claimed}">${s.claimed}</b><span>Claimed fixed</span></div><div><b class="mono" data-count="${s.verified}">${s.verified}</b><span>Verified fixed</span></div><div><b class="mono" data-count="${s.rejected}">${s.rejected}</b><span>False closures caught</span></div>`; animIn('#hstats > div', { stagger: .07 }); countUp('#hstats'); }
   } catch (e) { /* stats are optional */ }
+  revealOnScroll('.how > div');
 }
 async function signin() {
   try { ME = await api('GET', '/api/users/' + $('#oldid').value.trim()); localStorage.setItem('uid', ME.id); nav('feed'); } catch (e) { toast(e.message); }
@@ -140,23 +172,31 @@ function register(role) {
   regState = { role, path: ['India'], ok: false, level: 3 };
   const au = role === 'authority';
   $('#app').innerHTML = `<div class="narrow"><button class="back" onclick="nav('welcome')">← Back</button>
-  <div class="card form"><h2>${au ? 'Register as authority' : 'Create citizen account'}</h2><p class="meta sub">${au ? 'Reports in your jurisdiction and department are routed to you.' : 'Your ID is stored on this device. Other citizens see you under an anonymous name.'}</p>
+  <div class="card form"><h2>${au ? 'Register as authority' : 'Create citizen account'}</h2><p class="meta sub">${au ? 'Reports in your jurisdiction and department are routed to you.' : 'Other citizens see you under an anonymous name.'} One account per person, verified by Aadhaar number.</p>
   ${au ? `<div class="field"><label>Level</label><select id="lvl">${H.levelNames.map((n, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
   <div class="field"><label>Department</label><select id="dept"><option value="all">All departments</option>${deptsSorted().map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></div>
   <div class="field"><label>Office name <span class="opt">optional</span></label><input id="office" placeholder="As officially published"></div>` : ''}
   <div id="pick"></div>
+  ${aadhaarField('aadhaar')}<p class="hint">Only a one-way hash and the last 4 digits are stored, never the full number.</p>
   <div class="two"><div class="field"><label>Phone</label><input id="phone" inputmode="numeric" maxlength="14" placeholder="10-digit mobile number"></div>
   <div class="field"><label>Email</label><input id="email" type="email" placeholder="name@example.com"></div></div>
+  <div id="regerr" style="margin-top:16px"></div>
   <button class="btn pri lg block" id="go" onclick="doRegister()">Create account</button></div></div>`;
   const mount = () => mountPicker($('#pick'), { min: au ? regState.level + 1 : 4, max: au ? regState.level + 1 : 5, initial: ['India'], onChange: (p, ok) => { regState.path = p; regState.ok = ok; } });
   if (au) { $('#lvl').onchange = e => { regState.level = +e.target.value; mount(); }; }
   mount();
 }
+function regErr(m, offerLogin) { $('#regerr').innerHTML = `<div class="note bad">${esc(m)}${offerLogin ? `<div style="margin-top:8px"><button class="btn sm" onclick="aadhaarLogin()">Continue with Aadhaar</button></div>` : ''}</div>`; }
 async function doRegister() {
-  if (!regState.ok) return toast('Select your location');
-  const b = { role: regState.role, path: regState.path, phone: $('#phone').value, email: $('#email').value };
+  $('#regerr').innerHTML = '';
+  if (!regState.ok) return regErr('Select your location.');
+  const aadhaar = $('#aadhaar').value.replace(/\D/g, '');
+  if (!aadhaarOk(aadhaar)) return regErr('Enter a valid 12-digit Aadhaar number.');
+  const b = { role: regState.role, path: regState.path, phone: $('#phone').value, email: $('#email').value, aadhaar };
   if (regState.role === 'authority') Object.assign(b, { level: regState.level, dept: $('#dept').value, office: $('#office').value });
-  try { ME = await api('POST', '/api/users', b); localStorage.setItem('uid', ME.id); toast('Profile created: ' + ME.id); nav('feed'); } catch (e) { toast(e.message); }
+  $('#go').disabled = true;
+  try { ME = await api('POST', '/api/users', b); localStorage.setItem('uid', ME.id); toast('Account created. Your ID is ' + ME.id); nav('feed'); }
+  catch (e) { regErr(e.message, e.data && e.data.reason === 'aadhaar_exists'); $('#go').disabled = false; }
 }
 
 // ---------- geolocation ----------
@@ -173,12 +213,20 @@ async function curPos() { if (!GPS) GPS = await getGps(); return GPS; }
 const SEVCOL = { Critical: '#991b1b', High: '#ea580c', Medium: '#ca8a04', Low: '#16a34a', Unrated: '#64748b' };
 const INDIA = [[6.5, 68.0], [35.7, 97.4]];
 const maps = {};
+// Esri Canvas basemaps (no API key): light gray or dark gray base plus a matching label layer.
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+const tileUrl = () => `${ESRI}World_${isDark() ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`;
+const labelUrl = () => `${ESRI}World_${isDark() ? 'Dark' : 'Light'}_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
+function retheme() { for (const m of Object.values(maps)) { try { m._tiles.setUrl(tileUrl()); m._labels.setUrl(labelUrl()); } catch (e) { } } }
 function makeMap(id) {
   const el = document.getElementById(id);
   if (!window.L || !el) return null;
   if (maps[id]) { try { maps[id].remove(); } catch (e) { } }
-  const m = L.map(el, { scrollWheelZoom: false });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(m);
+  const m = L.map(el, { scrollWheelZoom: true, wheelPxPerZoomLevel: 90, zoomSnap: 0.5 });
+  m._tiles = L.tileLayer(tileUrl(), { maxNativeZoom: 16, maxZoom: 19, attribution: 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors' }).addTo(m);
+  m.createPane('labels'); m.getPane('labels').style.zIndex = 350; m.getPane('labels').style.pointerEvents = 'none';
+  m._labels = L.tileLayer(labelUrl(), { maxNativeZoom: 16, maxZoom: 19, pane: 'labels' }).addTo(m);
   maps[id] = m; setTimeout(() => m.invalidateSize(), 60);
   return m;
 }
@@ -239,7 +287,8 @@ async function loadList() {
   try {
     const l = await api('GET', '/api/reports?' + p);
     showPins('fmap', l, cit && useGps && GPS ? GPS : null);
-    $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : 'Nothing is waiting in this view.'}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`;
+    $('#list').innerHTML = (l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : 'Nothing is waiting in this view.'}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`);
+    animIn('#list > *', { stagger: .06 });
   } catch (e) { $('#list').innerHTML = `<div class="note bad">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
 function mediaHtml(l) {
@@ -258,7 +307,7 @@ function card(r) {
    <div class="rtop"><span class="badge st-${r.status}">${STAT[r.status]}</span><span class="badge sev-${r.severity}">${r.severity}${r.sev ? ' ' + r.sev + '/5' : ''}</span>${r.needsReview ? '<span class="badge st-claimed">Needs review</span>' : ''}<span class="cat">${esc(r.categoryLabel)}</span><span class="time">${ago(r.createdAt)}</span></div>
    <h3>${esc(r.caption)}</h3>
    ${r.description ? `<p class="desc">${esc(r.description)}</p>` : ''}
-   ${r.ai ? `<p class="ai"><span class="tag">AI ${Math.round(r.ai.confidence * 100)}%</span>${esc(r.ai.reasoning)}</p>` : ''}
+   ${r.ai ? `<p class="ai">${esc(r.ai.reasoning)}</p>` : ''}
    <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km` : ''}</span><span>${ic('landmark')}${r.assignedName} · ${dept} · SLA ${r.slaDays}d</span></div>
    ${r.afterMedia.length ? `<div class="ba"><figure>${img ? `<img src="${img.url}" alt="">` : ''}<figcaption>Before</figcaption></figure><figure><img src="${r.afterMedia[0].url}" alt=""><figcaption>After</figcaption></figure></div>` : ''}
    ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">${ic(VICON[r.verdict.result] || 'alert')}<div><b>${VLABEL[r.verdict.result] || esc(r.verdict.result)}</b><span class="vmeta">${r.verdict.by === 'ai' ? `Confidence ${Math.round(r.verdict.confidence * 100)}%` : r.verdict.by === 'integrity' ? 'Integrity check' : 'Not checked by AI'}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from the reported spot` : ''}</span><span>${esc(r.verdict.reason)}</span></div></div>` : ''}
@@ -266,7 +315,7 @@ function card(r) {
    <div class="actions">
     ${cit ? `<button class="ghost ${r.voted ? 'on' : ''}" onclick="upvote('${r.id}')" title="Upvote">${ic('up')}${r.votes}</button>` : `<span class="ghost">${ic('up')}${r.votes}</span>`}
     <button class="ghost" onclick="openThread('${r.id}')" title="Comments">${ic('msg')}${r.comments}</button>
-    <button class="ghost" onclick="openTimeline('${r.id}')">${ic('layers')}AI trace</button>
+    <button class="ghost" onclick="openTimeline('${r.id}')">${ic('layers')}Details</button>
     <span class="grow"></span>
     ${r.confirmed ? `<span class="meta">${r.confirmed} confirmed on site</span>` : ''}${r.merged ? `<span class="meta">${r.reporters} reports merged</span>` : ''}
     ${cit && !r.mine && !r.flagged ? `<button class="ghost danger" onclick="flag('${r.id}')" title="Report as false">${ic('flag')}</button>` : ''}
@@ -296,7 +345,7 @@ async function openTimeline(id) {
   modal(`<h3>${esc(r.caption)}</h3><div class="rtop" style="margin-bottom:10px"><span class="badge st-${r.status}">${STAT[r.status]}</span><span class="badge sev-${r.severity}">${r.severity}${r.sev ? ' ' + r.sev + '/5' : ''}</span><span class="cat">${esc(r.categoryLabel)}</span></div>
   ${r.needsReview ? `<div class="note warn">Queued for human review: ${esc(r.reviewWhy.join('; '))}</div>` : ''}
   ${r.ai && r.ai.evidence && r.ai.evidence.length ? `<dl class="kv"><dt>Visual evidence</dt><dd>${r.ai.evidence.map(esc).join('; ')}</dd></dl>` : ''}
-  ${traceHtml(r.trace)}
+  ${r.trace && r.trace.length ? `<h4>How this report was checked</h4>${traceHtml(r.trace)}` : ''}
   <dl class="kv">${r.verdict && r.verdict.evidence && r.verdict.evidence.length ? `<dt>Fix evidence</dt><dd>${r.verdict.evidence.map(esc).join('; ')}${r.verdict.model ? ` <span class="meta">(${esc(r.verdict.model)})</span>` : ''}</dd>` : ''}
   ${r.geo ? `<dt>Address source</dt><dd>${esc(r.geo.source)}, ${new Date(r.geo.t).toLocaleString()}</dd>` : ''}
   <dt>Location</dt><dd>${{ gps: 'Device GPS', exif: 'Photo GPS (EXIF)', manual: 'Set manually' }[r.locSource] || '–'}</dd></dl>
@@ -427,39 +476,124 @@ function traceHtml(trace, live) {
     return `<li class="ts-${st}"><span class="tdot">${st === 'running' ? '<span class="mini-spin"></span>' : st === 'pending' ? '' : ic(SICON[st] || 'check')}</span><div class="tmain"><div class="th"><b>${STEPNAME[t.step] || esc(t.step)}</b><span class="mono tsrc">${t.ms != null ? (t.ms / 1000).toFixed(1) + 's' : ''}${t.source ? ' · ' + esc(t.source) : ''}</span></div>${t.output ? `<p>${esc(t.output)}</p>` : ''}</div></li>`;
   }).join('')}</ol>`;
 }
+// ---------- Aadhaar helpers (format + Verhoeff checksum; the server re-checks everything) ----------
+const AVD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const AVP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+function aadhaarOk(a) { if (!/^[2-9]\d{11}$/.test(a)) return false; let c = 0; const d = a.split('').reverse().map(Number); for (let i = 0; i < d.length; i++) c = AVD[c][AVP[i % 8][d[i]]]; return c === 0; }
+function fmtAadhaar(el) { const v = el.value.replace(/\D/g, '').slice(0, 12); el.value = v.replace(/(\d{4})(?=\d)/g, '$1 '); }
+const aadhaarField = (id, label = 'Aadhaar number') => `<div class="field"><label>${label}</label><input id="${id}" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="0000 0000 0000" oninput="fmtAadhaar(this)"></div>`;
+function aadhaarLogin() {
+  modal(`<h3>Continue with Aadhaar</h3><p class="meta">Enter your Aadhaar number and the phone number linked to your account.</p>
+  ${aadhaarField('la')}<div class="field"><label>Phone</label><input id="lp" inputmode="numeric" maxlength="14" placeholder="10-digit mobile number"></div><div id="lerr" style="margin-top:12px"></div>
+  <button class="btn pri lg block" id="lgo" onclick="doAadhaarLogin()">Continue</button>`);
+}
+async function doAadhaarLogin() {
+  const aadhaar = $('#la').value.replace(/\D/g, ''), phone = $('#lp').value.replace(/\D/g, '');
+  const show = m => { $('#lerr').innerHTML = `<div class="note bad">${esc(m)}</div>`; };
+  if (!aadhaarOk(aadhaar)) return show('Enter a valid 12-digit Aadhaar number.');
+  if (phone.length < 10) return show('Enter the 10-digit phone number linked to your account.');
+  $('#lgo').disabled = true;
+  try {
+    ME = await api('POST', '/api/login/aadhaar', { aadhaar, phone }); localStorage.setItem('uid', ME.id);
+    closeModal(); toast('Signed in. Your ID is ' + ME.id); nav('feed');
+  } catch (e) { show(e.message); $('#lgo').disabled = false; }
+}
+
+// ---------- background upload with a progress bar at the bottom of the page ----------
+// The page stays usable while a report uploads and the AI agent runs. Real upload progress comes from XHR;
+// agent steps come from /api/progress. If the page is reloaded after the upload finished, tracking resumes.
+let UP = null;
+const UPKEY = 'pendingUpload';
+function upStepText(step) {
+  return {
+    guardrail: UP && UP.hasVideo ? 'Checking photos and videos' : 'Checking the photo',
+    perceive: 'Analysing the issue in the photo', critic: 'Double-checking the result',
+    geolocate: UP && UP.hasAddress ? 'Confirming the address' : 'Finding the missing address details',
+    dedupe: 'Looking for duplicate reports nearby', route: 'Setting priority and routing', publish: 'Saving the report'
+  }[step] || 'Processing';
+}
+function setBar(text, pct, state, action) {
+  const bar = $('#upbar'); if (!bar) return;
+  clearTimeout(setBar.fade);
+  bar.hidden = false; bar.className = state || '';
+  $('#uptext').textContent = text;
+  $('#uppct').textContent = pct != null ? Math.round(pct) + '%' : '';
+  $('#upfill').style.width = Math.max(2, Math.min(100, pct || 0)) + '%';
+  const a = $('#upact');
+  if (action) { a.hidden = false; a.textContent = action.label; a.onclick = action.fn; } else a.hidden = true;
+  $('#upclose').hidden = !(state === 'ok' || state === 'err');
+}
+function hideBar(delay) { clearTimeout(setBar.fade); setBar.fade = setTimeout(() => { const b = $('#upbar'); b.className += ' hide'; setTimeout(() => { if (b.className.includes('hide')) b.hidden = true; }, 450); }, delay || 0); }
+function sendUpload() {
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/reports'); xhr.setRequestHeader('content-type', 'application/json');
+  xhr.upload.onprogress = e => { if (e.lengthComputable && UP) setBar(`Uploading ${UP.hasVideo ? 'photos and videos' : UP.files > 1 ? UP.files + ' photos' : 'photo'}`, 3 + 27 * e.loaded / e.total); };
+  xhr.upload.onload = () => {
+    if (!UP) return; UP.uploaded = true;
+    try { localStorage.setItem(UPKEY, JSON.stringify({ clientId: UP.clientId, t: Date.now(), hasVideo: UP.hasVideo, hasAddress: UP.hasAddress })); } catch (e) { }
+    setBar(upStepText('guardrail'), 30); pollUpload();
+  };
+  xhr.onload = () => {
+    let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) { }
+    if (xhr.status >= 200 && xhr.status < 300) upDone(j);
+    else if (j.error) upFail(j.error, j.trace);
+  };
+  xhr.onerror = () => { if (UP && !UP.uploaded) upFail('Upload failed. Check your connection.', null, true); };
+  xhr.send(JSON.stringify(UP.body));
+}
+function pollUpload() {
+  clearInterval(pollUpload.t);
+  pollUpload.t = setInterval(async () => {
+    if (!UP) return clearInterval(pollUpload.t);
+    try {
+      const p = await api('GET', '/api/progress/' + UP.clientId);
+      UP.trace = p.trace;
+      if (p.done) return p.error ? upFail(p.error.message, p.trace) : upDone(p.result);
+      const next = STEPS.find(([k]) => !p.trace.some(t => t.step === k));
+      setBar(upStepText(next ? next[0] : 'publish'), 30 + 66 * p.trace.length / STEPS.length, '', { label: 'Details', fn: showUpDetails });
+    } catch (e) {
+      if (e.status === 404 && UP.uploaded && Date.now() - UP.started > 20000) upFail('Could not confirm this upload. Check your reports under Account.', null);
+    }
+    if (UP && Date.now() - UP.started > 240000) upFail('This is taking too long. Check your reports under Account in a few minutes.', null);
+  }, 900);
+}
+function showUpDetails() { modal(`<h3>How your report is being checked</h3>${traceHtml((UP && UP.trace) || [], !!UP && !UP.finished)}`); }
+function upDone(r) {
+  if (!UP || UP.finished) return; UP.finished = true; clearInterval(pollUpload.t);
+  try { localStorage.removeItem(UPKEY); } catch (e) { }
+  const rep = r.report || {}, trace = r.trace || UP.trace || [];
+  setBar(r.merged ? 'Uploaded successfully. Merged with an existing report nearby.' : 'Uploaded successfully', 100, 'ok', { label: 'View', fn: () => { modal(`<h3>${esc(rep.caption || 'Report')}</h3><h4>How this report was checked</h4>${traceHtml(trace)}`); } });
+  UP = null; bounce('#upbar .uprow'); hideBar(4500);
+  if (page === 'feed') loadList(); if (page === 'profile') profile();
+}
+function upFail(msg, trace, canRetry) {
+  if (!UP || UP.finished) return; UP.finished = true; clearInterval(pollUpload.t);
+  try { localStorage.removeItem(UPKEY); } catch (e) { }
+  const failed = UP; UP = canRetry ? null : null;
+  setBar('Not uploaded: ' + msg.replace(/^Report rejected by the guardrail: /, ''), 100, 'err',
+    canRetry ? { label: 'Retry', fn: () => { UP = Object.assign(failed, { finished: false, uploaded: false, started: Date.now() }); sendUpload(); } }
+      : trace && trace.length ? { label: 'Details', fn: () => modal(`<h3>Why it was not published</h3>${traceHtml(trace)}`) } : null);
+}
+function resumeUpload() {
+  let s = null; try { s = JSON.parse(localStorage.getItem(UPKEY) || 'null'); } catch (e) { }
+  if (!s || Date.now() - s.t > 15 * 60e3) { try { localStorage.removeItem(UPKEY); } catch (e) { } return; }
+  UP = { clientId: s.clientId, uploaded: true, started: Date.now(), hasVideo: s.hasVideo, hasAddress: s.hasAddress };
+  setBar('Resuming: ' + upStepText('guardrail'), 30); pollUpload();
+}
 async function submitReport() {
+  if (UP) return toast('Please wait for the current upload to finish.');
   if (!pending.some(m => m.type === 'image')) return toast('Add at least one photo');
   if (!$('#r-cap').value.trim()) return toast('Add a title');
   if (!rpos) return toast('Set the location');
   const clientId = 'sub-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-  const b = { clientId, user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
-  $('#r-go').disabled = true; $('#r-go').textContent = 'Submitting…';
-  modal(`<h3>Processing report</h3><p class="meta">Usually takes 5–20 seconds.</p><div id="prog">${traceHtml([], true)}</div>`);
-  let finished = false;
-  const done = (r, e) => {
-    if (finished) return; finished = true; clearInterval(timer);
-    const trace = (r && r.trace) || (e && e.data && e.data.trace) || [];
-    if (r) {
-      const rep = r.report;
-      modal(`<h3>${r.merged ? 'Merged with an existing report' : 'Report submitted'}</h3>
-      <p>${r.merged ? `This issue was already reported nearby. Your photos were added to it (${rep.reporters} reports combined) and its priority was raised.` : rep.sev ? `${esc(rep.categoryLabel)} · <span class="badge sev-${rep.severity}">${rep.severity} ${rep.sev}/5</span> · routed to the ${rep.assignedName} authority (${esc(rep.deptLabel)}) with an SLA of ${rep.slaDays} days.` : 'The AI could not assess this report with confidence, so it was queued for human review.'}</p>
-      ${traceHtml(trace)}<button class="btn pri lg block" onclick="closeModal();nav('feed')">View issues</button>`);
-    } else {
-      modal(`<h3>Report not submitted</h3><div class="note bad">${esc(e.message)}</div>${traceHtml(trace)}<button class="btn lg block" onclick="closeModal()">Back to form</button>`);
-      if ($('#r-go')) { $('#r-go').disabled = false; $('#r-go').textContent = 'Submit report'; }
-    }
-  };
-  const started = Date.now();
-  const timer = setInterval(async () => {
-    try {
-      const p = await api('GET', '/api/progress/' + clientId);
-      if (!finished && $('#prog')) $('#prog').innerHTML = traceHtml(p.trace, true);
-      if (p.done) p.error ? done(null, Object.assign(new Error(p.error.message), { data: { trace: p.trace } })) : done(p.result);
-    } catch (e) { /* not registered yet, keep polling */ }
-    if (Date.now() - started > 180000) done(null, new Error('No response from the server. Check your connection; if the report was saved it will appear under Account.'));
-  }, 900);
-  try { done(await api('POST', '/api/reports', b)); }
-  catch (e) { if (e.data && e.data.error) done(null, e); /* otherwise the connection dropped: keep polling for the result */ }
+  const body = { clientId, user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
+  UP = { clientId, body, started: Date.now(), files: pending.length, hasVideo: pending.some(m => m.type === 'video'), hasAddress: !!body.address.trim() };
+  setBar('Preparing upload', 2);
+  pending = []; rpos = null;
+  nav('feed');
+  sendUpload();
 }
 
 // ---------- authority resolve ----------
@@ -495,12 +629,13 @@ async function profile() {
   const mine = cit ? (await api('GET', `/api/reports?user=${ME.id}&radius=100&status=&sort=new`)).filter(r => r.mine) : [];
   $('#app').innerHTML = `<div class="narrow"><div class="pagehead"><div><h1>Account</h1></div><button class="btn" onclick="signout()">${ic('logout')} Sign out</button></div>
   <div class="card"><dl class="kv wide"><dt>ID</dt><dd class="mono">${esc(ME.id)}</dd><dt>Role</dt><dd>${cit ? 'Citizen' : `${esc(ME.office)} · ${H.levelNames[ME.level]} level · ${esc(ME.dept === 'all' ? 'All departments' : H.depts[ME.dept])}`}</dd>
-   <dt>${cit ? 'Area' : 'Jurisdiction'}</dt><dd>${esc(loc.join(' / '))}</dd><dt>Phone</dt><dd>${esc(ME.phone)}</dd><dt>Email</dt><dd>${esc(ME.email)}</dd><dt>Member since</dt><dd>${new Date(ME.createdAt).toLocaleDateString()}</dd></dl>
+   <dt>${cit ? 'Area' : 'Jurisdiction'}</dt><dd>${esc(loc.join(' / '))}</dd><dt>Aadhaar</dt><dd class="mono">${ME.aadhaarLast4 ? 'XXXX XXXX ' + esc(ME.aadhaarLast4) : 'Not linked'}</dd><dt>Phone</dt><dd>${esc(ME.phone)}</dd><dt>Email</dt><dd>${esc(ME.email)}</dd><dt>Member since</dt><dd>${new Date(ME.createdAt).toLocaleDateString()}</dd></dl>
   ${ME.suspendedUntil > Date.now() ? `<div class="note warn">Suspended until ${new Date(ME.suspendedUntil).toLocaleString()}</div>` : ''}</div>
-  ${cit ? `<div class="stats small"><div><b class="mono">${ME.stats.reports}</b><span>Reports</span></div><div><b class="mono">${ME.stats.resolved}</b><span>Verified fixed</span></div><div><b class="mono">${ME.stats.upvotes}</b><span>Upvotes received</span></div><div><b class="mono">${ME.strikes}</b><span>Strikes</span></div></div>
+  ${cit ? `<div class="stats small"><div><b class="mono" data-count="${ME.stats.reports}">${ME.stats.reports}</b><span>Reports</span></div><div><b class="mono" data-count="${ME.stats.resolved}">${ME.stats.resolved}</b><span>Verified fixed</span></div><div><b class="mono" data-count="${ME.stats.upvotes}">${ME.stats.upvotes}</b><span>Upvotes received</span></div><div><b class="mono" data-count="${ME.strikes}">${ME.strikes}</b><span>Strikes</span></div></div>
   <h2 class="sec">Your reports</h2>${mine.map(card).join('') || `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>Reports you submit appear here.</span></div>`}` : ''}</div>`;
 }
 function signout() { localStorage.removeItem('uid'); ME = null; nav('welcome'); }
+const _profile = profile; profile = async function () { await _profile(); countUp('#app'); animIn('#app > .narrow > *'); };
 
 // ---------- dashboard ----------
 let dpath = null, ddepth = 0;
@@ -525,9 +660,9 @@ async function loadDash() {
   const tw = html => `<div class="tablewrap"><table>${html}</table></div>`;
   const sorted = d.depts.slice().sort((a, b) => a.label.localeCompare(b.label)), cats = d.cats.slice().sort((a, b) => a.label.localeCompare(b.label));
   $('#dbody').innerHTML = `<div class="stats">
-   <div><b class="mono">${s.total}</b><span>Issues</span></div><div><b class="mono">${s.claimedRate}%</b><span>Claimed closure rate</span></div>
-   <div><b class="mono ok">${s.verifiedRate}%</b><span>Verified closure rate</span></div><div><b class="mono ${gap ? 'bad' : ''}">${gap} pts</b><span>Verification gap</span></div>
-   <div><b class="mono">${s.rejected}</b><span>Closures rejected by AI</span></div><div><b class="mono">${s.overdue}</b><span>Past SLA</span></div></div>
+   <div><b class="mono" data-count="${s.total}">${s.total}</b><span>Issues</span></div><div><b class="mono" data-count="${s.claimedRate}" data-suffix="%">${s.claimedRate}%</b><span>Claimed closure rate</span></div>
+   <div><b class="mono ok" data-count="${s.verifiedRate}" data-suffix="%">${s.verifiedRate}%</b><span>Verified closure rate</span></div><div><b class="mono ${gap ? 'bad' : ''}" data-count="${gap}" data-suffix=" pts">${gap} pts</b><span>Verification gap</span></div>
+   <div><b class="mono" data-count="${s.rejected}">${s.rejected}</b><span>Closures rejected by AI</span></div><div><b class="mono" data-count="${s.overdue}">${s.overdue}</b><span>Past SLA</span></div></div>
   <div class="dash-top"><div class="card truth"><h3>Claimed vs verified</h3><p class="meta">${esc(d.path.slice(1).join(' / ') || 'India')}</p>
     <div class="cmprow"><span>Claimed</span><div class="bar"><i style="width:${s.claimedRate}%"></i></div><b class="mono">${s.claimedRate}%</b></div>
     <div class="cmprow"><span>Verified</span><div class="bar ok"><i style="width:${s.verifiedRate}%"></i></div><b class="mono">${s.verifiedRate}%</b></div>
@@ -539,5 +674,6 @@ async function loadDash() {
   <td style="min-width:110px"><span class="mono">${x.perf ?? '–'}</span><div class="bar thin"><i style="width:${x.perf || 0}%"></i></div></td><td class="mono">${x.resolved}/${x.total}</td><td class="mono">${x.pending}</td><td class="mono">${x.overdue}</td><td class="mono">${x.avgDays ?? '–'}</td></tr>`).join('')}`) : '<p class="meta">No reports yet.</p>'}</div>
   <div class="card"><h3>Categories</h3>${cats.length ? tw(`<tr><th>Category</th><th>Total</th><th>Verified</th><th>Rate</th></tr>${cats.map(x => `<tr><td>${esc(x.label)}</td><td class="mono">${x.total}</td><td class="mono">${x.resolved}</td><td class="mono">${x.rate}%</td></tr>`).join('')}`) : '<p class="meta">No reports yet.</p>'}</div>`;
   showPins('dmap', d.points || [], GPS);
+  animIn('#dbody > *', { stagger: .06 }); countUp('#dbody'); animBars('#dbody .bar i'); revealOnScroll('#dbody > .card');
 }
 window.nav = nav;

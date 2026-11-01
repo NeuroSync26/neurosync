@@ -104,6 +104,34 @@ const lastHash = new Map();
 let db = { users: {}, reports: {}, notices: [] };
 let storageStatus = useSupabase ? 'connecting' : 'local';
 
+const SETUP_MSG = 'The database is not set up yet. Run civic-triage/supabase.sql in the Supabase SQL Editor; the app starts automatically within 20 seconds.';
+// Reads every table into a fresh object. Throws { setup: true } when a table is missing.
+async function readAllTables() {
+  const fresh = { users: {}, reports: {}, notices: [] }, hashes = new Map();
+  for (const table of TABLES) {
+    for (let from = 0; ; from += 1000) {
+      const res = await fetch(`${SB_URL}/rest/v1/${table}?select=id,data&order=id`, { headers: sbHeaders({ Range: `${from}-${from + 999}`, 'Range-Unit': 'items' }), signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        const body = (await res.text()).slice(0, 200);
+        if (res.status === 404 || /PGRST205|does not exist|schema cache/i.test(body)) throw Object.assign(new Error(`table "${table}" not found`), { setup: true });
+        throw new Error(`HTTP ${res.status} ${body}`);
+      }
+      const page = await res.json();
+      for (const r of page) {
+        if (table === 'reports') fresh.reports[r.id] = r.data; else if (table === 'notices') fresh.notices.push(r.data); else fresh.users[r.id] = r.data;
+        hashes.set(table + ':' + r.id, hashOf(r.data));
+      }
+      if (page.length < 1000) break;
+    }
+  }
+  fresh.notices.sort((a, b) => a.t - b.t);
+  return { fresh, hashes };
+}
+function adopt({ fresh, hashes }) {
+  db = fresh; lastHash.clear(); for (const [k, v] of hashes) lastHash.set(k, v);
+  storageStatus = 'supabase';
+  console.log(`Storage: Supabase (${hashes.size} records loaded from ${TABLES.join(', ')})`);
+}
 async function loadDb() {
   if (!useSupabase) {
     try { db = JSON.parse(fs.readFileSync(DBF, 'utf8')); } catch (e) { /* fresh local db */ }
@@ -111,36 +139,23 @@ async function loadDb() {
     return;
   }
   for (let attempt = 1; attempt <= 6; attempt++) {
-    try {
-      let count = 0;
-      for (const table of TABLES) {
-        for (let from = 0; ; from += 1000) {
-          const res = await fetch(`${SB_URL}/rest/v1/${table}?select=id,data&order=id`, { headers: sbHeaders({ Range: `${from}-${from + 999}`, 'Range-Unit': 'items' }), signal: AbortSignal.timeout(20000) });
-          if (!res.ok) {
-            const body = (await res.text()).slice(0, 200);
-            if (res.status === 404 || /PGRST205|does not exist|schema cache/i.test(body)) throw new Error(`table "${table}" not found. Run civic-triage/supabase.sql in the Supabase SQL editor first.`);
-            throw new Error(`HTTP ${res.status} ${body}`);
-          }
-          const page = await res.json();
-          for (const r of page) {
-            if (table === 'reports') db.reports[r.id] = r.data;
-            else if (table === 'notices') db.notices.push(r.data);
-            else db.users[r.id] = r.data;
-            lastHash.set(table + ':' + r.id, hashOf(r.data)); count++;
-          }
-          if (page.length < 1000) break;
-        }
+    try { adopt(await readAllTables()); return; }
+    catch (e) {
+      if (e.setup) {
+        // Tables missing: keep the site up with a clear message (all data APIs return 503) and retry until the SQL is run.
+        storageStatus = 'setup-required';
+        console.error(`Supabase: ${e.message}. ${SETUP_MSG}`);
+        const timer = setInterval(async () => {
+          try { adopt(await readAllTables()); clearInterval(timer); }
+          catch (e2) { if (!e2.setup) console.error('Supabase retry failed:', e2.message); }
+        }, 20000);
+        return;
       }
-      db.notices.sort((a, b) => a.t - b.t);
-      storageStatus = 'supabase';
-      console.log(`Storage: Supabase (${count} records loaded from ${TABLES.join(', ')})`);
-      return;
-    } catch (e) {
       console.error(`Supabase load failed (attempt ${attempt}/6): ${e.message}`);
       await new Promise(r => setTimeout(r, 2000 * attempt));
     }
   }
-  console.error('Could not load data from Supabase. Exiting so the host restarts the service (never starting with an empty database).');
+  console.error('Could not reach Supabase. Exiting so the host restarts the service (never starting with an empty database).');
   process.exit(1);
 }
 
@@ -492,7 +507,21 @@ function view(r, uid) {
     myResVote: r.resVotes && r.resVotes[uid] !== undefined ? r.resVotes[uid] : null
   };
 }
-function userView(u) { return u; }
+// ---------- Aadhaar: one account per person ----------
+// The full Aadhaar number is never stored or logged. Only an HMAC (keyed with AADHAAR_SECRET) is kept to detect
+// duplicates, plus the last 4 digits for display. Numbers are checked for format and the Verhoeff checksum.
+// Note: this does not prove the number belongs to the user; that needs UIDAI OTP/eKYC through a licensed provider.
+if (!process.env.AADHAAR_SECRET) console.warn('AADHAAR_SECRET is not set: using a fallback key. Set it once and never change it, or existing Aadhaar links stop matching.');
+const AADHAAR_KEY = process.env.AADHAAR_SECRET || ('fallback:' + (process.env.SUPABASE_SERVICE_ROLE_KEY || 'local-dev'));
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+function verhoeffOk(s) { let c = 0; const d = s.split('').reverse().map(Number); for (let i = 0; i < d.length; i++) c = VD[c][VP[i % 8][d[i]]]; return c === 0; }
+function cleanAadhaar(v) { const a = String(v || '').replace(/[\s-]/g, ''); return /^[2-9]\d{11}$/.test(a) && verhoeffOk(a) ? a : null; }
+const aadhaarHash = a => crypto.createHmac('sha256', AADHAAR_KEY).update('aadhaar:' + a).digest('hex');
+function publicUser(u) { const { aadhaarHash: _secret, ...rest } = u; return rest; }
+const loginFails = new Map(); // ip -> [timestamps]
 function needUser(id, role) {
   const u = db.users[id];
   if (!u) throw err(401, 'Unknown profile. Please register again.');
@@ -570,7 +599,12 @@ R('POST', /^\/api\/users$/, ({ body: b }) => {
   const phone = String(b.phone || '').replace(/\D/g, '').slice(-10), email = String(b.email || '').trim().slice(0, 80);
   if (phone.length !== 10) throw err(400, 'Enter a valid 10-digit phone number');
   if (!/^\S+@\S+\.\S+$/.test(email)) throw err(400, 'Enter a valid email');
-  const u = { role, path: p, phone, email, createdAt: now(), strikes: 0, suspendedUntil: 0 };
+  const aad = cleanAadhaar(b.aadhaar);
+  if (!aad) throw err(400, 'Enter a valid 12-digit Aadhaar number.');
+  const ah = aadhaarHash(aad), all = Object.values(db.users);
+  if (all.some(x => x.aadhaarHash === ah)) throw Object.assign(err(409, 'This Aadhaar number is already registered. One person can have only one account. Sign in with your ID, or choose "Forgot your ID?" to continue with Aadhaar.'), { data: { reason: 'aadhaar_exists' } });
+  if (all.some(x => x.phone === phone)) throw Object.assign(err(409, 'This phone number is already linked to another Aadhaar number. Each Aadhaar number can be linked to only one phone number.'), { data: { reason: 'phone_exists' } });
+  const u = { role, path: p, phone, email, createdAt: now(), strikes: 0, suspendedUntil: 0, aadhaarHash: ah, aadhaarLast4: aad.slice(-4) };
   if (role === 'citizen') {
     if (p.length < 4) throw err(400, 'Choose your location down to at least city / block level');
     u.id = rid('CZ');
@@ -581,12 +615,22 @@ R('POST', /^\/api\/users$/, ({ body: b }) => {
     u.id = rid('AU'); u.level = lvl; u.dept = b.dept; u.office = String(b.office || '').trim().slice(0, 80) || `${LEVEL_NAMES[lvl]} ${b.dept === 'all' ? 'administration' : DEPTS[b.dept].toLowerCase()} office`;
   }
   db.users[u.id] = u; save();
-  return u;
+  return publicUser(u);
+});
+// "Forgot your ID?": sign in with Aadhaar number + the phone number linked to it (both must match).
+R('POST', /^\/api\/login\/aadhaar$/, ({ body: b, ip }) => {
+  const recent = (loginFails.get(ip) || []).filter(t => now() - t < 15 * 60e3);
+  if (recent.length >= 8) throw err(429, 'Too many attempts. Try again in 15 minutes.');
+  const aad = cleanAadhaar(b.aadhaar), phone = String(b.phone || '').replace(/\D/g, '').slice(-10);
+  const u = aad && phone.length === 10 ? Object.values(db.users).find(x => x.aadhaarHash === aadhaarHash(aad)) : null;
+  if (!u || u.phone !== phone) { recent.push(now()); loginFails.set(ip, recent); throw err(401, 'No account matches this Aadhaar number and phone number.'); }
+  loginFails.delete(ip);
+  return publicUser(u);
 });
 R('GET', /^\/api\/users\/([\w-]+)$/, ({ m }) => {
   const u = db.users[m[1]]; if (!u) throw err(404, 'No such profile');
   const mine = Object.values(db.reports).filter(r => r.user === u.id);
-  return { ...u, stats: { reports: mine.length, resolved: mine.filter(r => r.status === 'resolved').length, upvotes: mine.reduce((a, r) => a + Object.keys(r.votes).length, 0) }, suspended: u.suspendedUntil > now() };
+  return { ...publicUser(u), stats: { reports: mine.length, resolved: mine.filter(r => r.status === 'resolved').length, upvotes: mine.reduce((a, r) => a + Object.keys(r.votes).length, 0) }, suspended: u.suspendedUntil > now() };
 });
 
 R('GET', /^\/api\/reports$/, ({ q }) => {
@@ -781,7 +825,7 @@ R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
   }
   save(); return n;
 });
-R('GET', /^\/api\/health$/, () => ({ ok: storageStatus !== 'save-error', storage: storageStatus, ai: aiConfigured(), reports: Object.keys(db.reports).length, time: new Date().toISOString() }));
+R('GET', /^\/api\/health$/, () => ({ ok: storageStatus === 'supabase' || storageStatus === 'local', storage: storageStatus, ...(storageStatus === 'setup-required' ? { message: SETUP_MSG } : {}), ai: aiConfigured(), reports: Object.keys(db.reports).length, time: new Date().toISOString() }));
 R('GET', /^\/api\/dashboard$/, ({ q }) => dashboard(q.path ? q.path.split('|').filter(Boolean) : ['India'], +q.depth || 0));
 
 
@@ -811,9 +855,11 @@ const server = http.createServer((req, res) => {
       try {
         const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
         const q = Object.fromEntries(url.searchParams);
+        if (storageStatus === 'setup-required' && !['/api/health', '/api/hierarchy'].includes(pn)) return send(503, { error: SETUP_MSG, setup: true });
+        const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
         for (const [m, re, fn] of routes) {
           const mm = re.exec(pn);
-          if (m === req.method && mm) return send(200, await fn({ m: mm, q, body }));
+          if (m === req.method && mm) return send(200, await fn({ m: mm, q, body, ip }));
         }
         send(404, { error: 'No such endpoint' });
       } catch (e) { send(e.code || 500, { error: e.message, ...(e.data || {}) }); if (!e.code) console.error(e); }

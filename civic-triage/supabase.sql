@@ -82,6 +82,14 @@ create table if not exists notices (
   data        jsonb not null
 );
 
+-- Aadhaar: only a keyed hash (to stop duplicate accounts) and the last 4 digits are stored, never the full number.
+alter table citizens    add column if not exists aadhaar_last4 text generated always as (data->>'aadhaarLast4') stored;
+alter table citizens    add column if not exists aadhaar_hash  text generated always as (data->>'aadhaarHash') stored;
+alter table authorities add column if not exists aadhaar_last4 text generated always as (data->>'aadhaarLast4') stored;
+alter table authorities add column if not exists aadhaar_hash  text generated always as (data->>'aadhaarHash') stored;
+create unique index if not exists citizens_aadhaar_uq    on citizens (aadhaar_hash)    where aadhaar_hash is not null;
+create unique index if not exists authorities_aadhaar_uq on authorities (aadhaar_hash) where aadhaar_hash is not null;
+
 -- 3. Only the server (service role key) can read or write. No public access.
 alter table citizens enable row level security;
 alter table authorities enable row level security;
@@ -107,3 +115,6 @@ begin
   end if;
 end $$;
 -- After checking the new tables, the old table can be removed with:  drop table app_docs;
+
+-- 5. Make the new tables visible to the API immediately
+notify pgrst, 'reload schema';

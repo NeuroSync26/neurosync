@@ -5,6 +5,8 @@ Citizens report civic issues with a photo. An AI agent checks, classifies, score
 Built for Forge Gen AI Buildathon (Theme 1: Civic Pulse) by Team NeuroSync, IIT Kharagpur. Live data comes only from real reports filed at IIT Kharagpur and Kharagpur town; the system itself works for any location in India.
 
 ## Features
+- **One account per person:** sign-up requires an Aadhaar number (format and Verhoeff checksum checked). Only a keyed one-way hash (HMAC with `AADHAAR_SECRET`) and the last 4 digits are stored, never the full number. A second account with the same Aadhaar, or a phone number already linked to another Aadhaar, is refused. "Forgot your ID?" signs in with Aadhaar number plus the linked phone number (rate-limited). The number is not verified against UIDAI; that needs OTP/eKYC through a licensed provider.
+- **Background upload:** after submitting, the page stays usable; a progress bar at the bottom shows upload progress and each AI step, then "Uploaded successfully". Tracking resumes after a page reload.
 - **Report:** photo (required) + caption; location from device GPS, the photo's EXIF GPS, a map pin, or an address search (manual locations are labelled "location set manually"). No default location is ever assumed.
 - **AI triage agent** with a visible **Agent trace** for every report (see below).
 - **Duplicate merge:** the same category within 150 m merges into one report and raises its priority.
@@ -69,6 +71,7 @@ Without `SUPABASE_*` the app stores data in `./data` (development only). Without
 | `NOMINATIM_USER_AGENT` | recommended | identifies the app to Nominatim |
 | `DEPARTMENTS_JSON` | no | official department names + source URLs |
 | `GEMINI_THINKING_LEVEL` | no | e.g. `low` for faster Gemini 3 responses |
+| `AADHAAR_SECRET` | yes (prod) | long random string used to hash Aadhaar numbers; set once and never change it |
 
 ### Supabase setup
 1. Open **SQL Editor**, paste the contents of [`supabase.sql`](supabase.sql) and run it. It creates four tables that are readable in the **Table Editor**:
@@ -84,14 +87,15 @@ Without `SUPABASE_*` the app stores data in `./data` (development only). Without
 1. New → Web Service → connect `NeuroSync26/neurosync`, branch `feature/civic-triage` (or `main` after merging).
 2. Root Directory: `civic-triage` · Runtime: Node · Build Command: `npm install` · Start Command: `node server.js` · Instance: Free.
 3. Add the environment variables above, then deploy.
-4. Check `https://<your-app>.onrender.com/api/health` shows `"storage":"supabase","ai":true`. If storage is `local`, the Supabase variables are missing; if the service keeps restarting, check the logs (usually `supabase.sql` has not been run).
+4. Check `https://<your-app>.onrender.com/api/health` shows `"storage":"supabase","ai":true`. If storage is `local`, the Supabase variables are missing. If it is `setup-required`, run `supabase.sql`; the app picks up the tables within 20 seconds without a redeploy.
 5. The free tier sleeps when idle: open `/api/health` a minute before a demo.
 
 ## Data sources
 - **Citizen reports:** real photos and locations submitted through the app. There is **no seed, mock or demo data**; empty views say "No reports yet".
 - **Google Gemini API:** vision triage, critic and before/after verification (model name stored with each verdict).
 - **OpenStreetMap Nominatim:** reverse geocoding and address search (© OpenStreetMap contributors, ODbL). Source and fetch time are stored with every address.
-- **OpenStreetMap tiles via Leaflet** for maps.
+- **Maps:** Leaflet with Esri Canvas basemaps (light and dark gray) built on OpenStreetMap and other data.
+- **Motion:** CSS transitions plus GSAP and ScrollTrigger; disabled automatically for users who prefer reduced motion.
 - **Supabase:** Postgres and Storage.
 - `hierarchy.js`: names of Indian states/UTs, major districts and some localities, used only for choosing a user's area and for dashboard grouping. It is not used for any report location or statistic.
 - **Departments:** generic function labels (e.g. "Sanitation & waste") unless an official name and its published source are configured.

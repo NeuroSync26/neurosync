@@ -101,6 +101,7 @@ const TABLES = ['citizens', 'authorities', 'reports', 'notices'];
 const sbHeaders = (extra = {}) => ({ apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, ...extra });
 const hashOf = d => crypto.createHash('sha1').update(JSON.stringify(d)).digest('hex');
 const lastHash = new Map();
+const pendingDeletes = []; // [table, id] rows to delete on the next flush
 let db = { users: {}, reports: {}, notices: [] };
 let storageStatus = useSupabase ? 'connecting' : 'local';
 
@@ -172,6 +173,12 @@ async function flush() {
     for (const u of Object.values(db.users)) add(u.role === 'authority' ? 'authorities' : 'citizens', u, u.createdAt);
     for (const r of Object.values(db.reports)) add('reports', r, r.createdAt);
     for (const n of db.notices) add('notices', n, n.t);
+    while (pendingDeletes.length) {
+      const [table, id] = pendingDeletes[0];
+      const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers: sbHeaders({ Prefer: 'return=minimal' }), signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`${table} delete: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+      lastHash.delete(table + ':' + id); pendingDeletes.shift();
+    }
     for (const [table, rows] of Object.entries(byTable)) {
       for (let i = 0; i < rows.length; i += 50) {
         const chunk = rows.slice(i, i + 50);
@@ -457,8 +464,9 @@ async function runTriage(inp) {
   const deptKey = CATS[category].dept;
   const routeWhy = sev == null
     ? `No AI severity (human review needed). Default SLA ${base} days for ${CATS[category].label.toLowerCase()}. Department key "${deptKey}" from category.`
-    : `Severity ${sev}/5 (${sevName(sev)}) from vision model, confidence ${Math.round(p.confidence * 100)}%: ${short(p.reasoning, 200)} SLA: base ${base} days for ${CATS[category].label.toLowerCase()}${slaDays !== base ? `, shortened to ${slaDays} days because severity is ${sev}` : ''}. Department key "${deptKey}" from category; jurisdiction from the citizen's area${sev >= 5 ? ', escalated one level because severity is critical' : ''}.`;
+    : `Severity ${sev}/5 (${sevName(sev)}) from vision model, confidence ${Math.round(p.confidence * 100)}%: ${short(p.reasoning, 200)} SLA: base ${base} days for ${CATS[category].label.toLowerCase()}${slaDays !== base ? `, shortened to ${slaDays} days because severity is ${sev}` : ''}. Department key "${deptKey}" from category; sent to the ${LEVEL_NAMES[inp.levelIdx != null ? inp.levelIdx : 3]} authority chosen by the citizen, for the area where the issue is.`;
   step('route', needsReview ? 'warn' : 'ok', routeWhy, { source: 'routing rules' });
+  inp.locPath = pathForLocation(geo, inp.lat, inp.lng);
 
   return {
     caption: inp.caption, description: inp.description, category, sev, slaDays, deptKey, needsReview, reviewWhy, privacyFlag, geo, dup, trace,
@@ -466,6 +474,25 @@ async function runTriage(inp) {
   };
 }
 
+// ---------- report location -> administrative area ----------
+// Routes by where the issue IS (reverse-geocoded), not by the reporter's home area. Falls back to the reporter's area.
+const norm = s => String(s || '').toLowerCase().replace(/\b(district|state of|union territory of|municipality|city)\b/g, '').replace(/[^a-z]/g, '');
+function pathForLocation(geo, lat, lng) {
+  if (!geo) return null;
+  const st = tree.c.find(x => norm(x.n) === norm(geo.state)); if (!st) return null;
+  const path = ['India', st.n];
+  const dist = st.c.find(x => norm(x.n) === norm(geo.district)) || st.c.find(x => x.c.some(c => norm(c.n) === norm(geo.city)));
+  if (!dist) return path;
+  path.push(dist.n);
+  const city = dist.c.find(x => norm(x.n) === norm(geo.city)) || (dist.c.length === 1 ? dist.c[0] : null);
+  if (!city) return path;
+  path.push(city.n);
+  let best = null, bd = 4; // nearest listed locality within 4 km
+  for (const l of city.c || []) { const d = km([lat, lng], l.g); if (d != null && d < bd) { bd = d; best = l; } }
+  if (best) path.push(best.n);
+  return path;
+}
+const LEVEL_KEYS = { national: 0, state: 1, district: 2, local: 3 };
 // ---------- domain logic ----------
 // Priority score: AI severity (1-5) is the main signal; citizen upvotes, on-site confirmations and age add a small boost.
 function score(r) {
@@ -477,9 +504,8 @@ function score(r) {
 const sevName = v => v >= 5 ? 'Critical' : v === 4 ? 'High' : v === 3 ? 'Medium' : v >= 1 ? 'Low' : 'Unrated';
 const sevLabel = r => sevName(r.sev);
 const slaOf = r => r.slaDays || CATS[r.category].sla;
-function assigned(r) { // auto-routing + SLA escalation: local -> district -> state -> national
-  let lvl = Math.min(3, r.path.length - 1);
-  if (r.sev >= 5) lvl = Math.max(0, lvl - 1);
+function assigned(r) { // level chosen by the citizen (default local), escalated one level up each time the SLA lapses
+  let lvl = Math.min(r.levelIdx != null ? r.levelIdx : 3, r.path.length - 1);
   if (r.status !== 'resolved') {
     const esc = Math.floor((now() - r.createdAt) / DAY / slaOf(r));
     lvl = Math.max(0, lvl - esc);
@@ -498,7 +524,7 @@ function view(r, uid) {
     media: r.media.map(m => ({ type: m.type, url: m.url })), afterMedia: (r.afterMedia || []).map(m => ({ type: m.type, url: m.url })),
     votes: ids.length, confirmed: ids.filter(x => x.confirmed).length, voted: !!v,
     comments: r.comments.length, flags: Object.keys(r.flags).length, flagged: !!r.flags[uid],
-    status: r.status, score: r.score, severity: sevLabel(r), sev: r.sev || null, assignedLevel: assigned(r), assignedName: LEVEL_NAMES[assigned(r)],
+    status: r.status, score: r.score, severity: sevLabel(r), sev: r.sev || null, assignedLevel: assigned(r), assignedName: LEVEL_NAMES[assigned(r)], chosenLevel: LEVEL_NAMES[r.levelIdx != null ? r.levelIdx : 3], areaPath: r.path.slice(1),
     slaDays: slaOf(r), createdAt: r.createdAt, resolvedAt: r.resolvedAt || null,
     author: anon(r.user, r.id), mine: r.user === uid, reporters: 1 + r.supporters.length, merged: r.supporters.length > 0,
     timeline: r.timeline, ai: r.ai || null, trace: r.trace || [], needsReview: !!r.needsReview, reviewWhy: r.reviewWhy || [], privacyFlag: !!r.privacyFlag, locSource: r.locSource || null, geo: r.geo || null, userCategory: r.userCategory || null, verdict: r.verdict || null, removed: !!r.removed,
@@ -540,7 +566,7 @@ function findDuplicate(c) {
   const t = tokens(c.caption + ' ' + c.address);
   let best = null, bs = 0;
   for (const r of Object.values(db.reports)) {
-    if (r.removed || r.category !== c.category || r.status === 'resolved') continue;
+    if (r.removed || r.withdrawn || r.category !== c.category || r.status === 'resolved') continue;
     const d = km(c.lat != null ? [c.lat, c.lng] : null, r.lat != null ? [r.lat, r.lng] : null);
     const sim = jac(t, tokens(r.caption + ' ' + r.address));
     let s = 0;
@@ -571,7 +597,7 @@ function stats(list) {
   };
 }
 function dashboard(pre, depth) {
-  const list = Object.values(db.reports).filter(r => !r.removed && isPrefix(pre, r.path));
+  const list = Object.values(db.reports).filter(r => !r.removed && !r.withdrawn && isPrefix(pre, r.path));
   const d = Math.max(pre.length + 1, Math.min(5, depth || pre.length + 1));
   const groups = {};
   for (const r of list) if (r.path.length >= d) (groups[r.path.slice(0, d).join('>')] ||= []).push(r);
@@ -617,6 +643,33 @@ R('POST', /^\/api\/users$/, ({ body: b }) => {
   db.users[u.id] = u; save();
   return publicUser(u);
 });
+// Edit account: citizens can change their area; authorities their level, department, office and jurisdiction.
+R('PATCH', /^\/api\/users\/([\w-]+)$/, ({ m, body: b }) => {
+  const u = needUser(m[1]);
+  const p = (Array.isArray(b.path) ? b.path : []).map(x => String(x).trim().slice(0, 60)).filter(Boolean);
+  if (p[0] !== 'India' || !findNode(p)) throw err(400, 'Choose your location from the list.');
+  if (u.role === 'citizen') {
+    if (p.length < 4) throw err(400, 'Choose your area down to at least city level.');
+    u.path = p;
+  } else {
+    const lvl = +b.level;
+    if (![0, 1, 2, 3].includes(lvl) || p.length !== lvl + 1) throw err(400, 'Choose the jurisdiction fully for the selected level.');
+    if (b.dept !== 'all' && !DEPTS[b.dept]) throw err(400, 'Choose a department.');
+    u.level = lvl; u.dept = b.dept; u.path = p;
+    u.office = String(b.office || '').trim().slice(0, 80) || `${LEVEL_NAMES[lvl]} ${b.dept === 'all' ? 'administration' : DEPTS[b.dept].toLowerCase()} office`;
+  }
+  u.updatedAt = now(); save();
+  return publicUser(u);
+});
+// Delete account (asks for confirmation in the UI). Reports stay public but are anonymous.
+R('DELETE', /^\/api\/users\/([\w-]+)$/, ({ m, body: b }) => {
+  const u = needUser(m[1]);
+  if (b.confirm !== 'DELETE') throw err(400, 'Type DELETE to confirm.');
+  delete db.users[u.id];
+  if (useSupabase) pendingDeletes.push([u.role === 'authority' ? 'authorities' : 'citizens', u.id]);
+  save();
+  return { ok: true };
+});
 // "Forgot your ID?": sign in with Aadhaar number + the phone number linked to it (both must match).
 R('POST', /^\/api\/login\/aadhaar$/, ({ body: b, ip }) => {
   const recent = (loginFails.get(ip) || []).filter(t => now() - t < 15 * 60e3);
@@ -638,8 +691,9 @@ R('GET', /^\/api\/reports$/, ({ q }) => {
   const st = q.status, cat = q.cat, sort = q.sort || 'priority', text = (q.q || '').toLowerCase();
   const here = (num(q.lat) != null && num(q.lng) != null) ? [+q.lat, +q.lng] : null; // only the viewer's real location, never a default
   const radius = Math.min(100, Math.max(0.5, +q.radius || CIRCULATION_KM));
-  let list = Object.values(db.reports);
-  if (u.role === 'citizen') {
+  let list = Object.values(db.reports).filter(r => !r.withdrawn);
+  if (u.role === 'citizen' && q.mine === '1') list = list.filter(r => r.user === u.id);
+  else if (u.role === 'citizen') {
     list = list.filter(r => !r.removed || r.user === u.id);
     list = list.filter(r => { const d = km(here, r.lat != null ? [r.lat, r.lng] : null); return d != null ? d <= radius : isPrefix(u.path.slice(0, 4), r.path); });
   } else {
@@ -655,7 +709,7 @@ R('GET', /^\/api\/reports$/, ({ q }) => {
   return list.slice(0, 80).map(r => { const v = view(r, u.id); const d = km(here, r.lat != null ? [r.lat, r.lng] : null); v.distanceKm = d == null ? null : +d.toFixed(2); return v; });
 });
 R('GET', /^\/api\/reports\/([\w-]+)$/, ({ m, q }) => {
-  const r = db.reports[m[1]]; if (!r) throw err(404, 'Not found');
+  const r = db.reports[m[1]]; if (!r || r.withdrawn) throw err(404, 'Not found');
   return { ...view(r, q.user), thread: r.comments.map(c => ({ name: c.official ? '🏛 ' + c.name : c.name, text: c.text, t: c.t, official: !!c.official, mine: c.user === q.user })) };
 });
 
@@ -678,10 +732,12 @@ async function createReport(b, trace) {
   const lat = num(b.lat), lng = num(b.lng);
   if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw err(400, 'Set the issue location: allow location access, use a photo with GPS, drop a pin on the map or search an address.');
   const locSource = ['gps', 'exif', 'manual'].includes(b.locSource) ? b.locSource : 'manual';
+  const levelIdx = LEVEL_KEYS[b.level] != null ? LEVEL_KEYS[b.level] : 3;
   const media = parseMedia(b.media);
   if (!media.some(m => m.type === 'image')) throw err(400, 'Add at least one photo: the AI agent needs a photo to assess the issue.');
 
-  const t = await runTriage({ caption, description, address, userCat, media, lat, lng, locSource, path: u.path, trace });
+  const inp = { caption, description, address, userCat, media, lat, lng, locSource, path: u.path, levelIdx, trace };
+  const t = await runTriage(inp);
   if (t.rejected) throw Object.assign(err(422, 'Report rejected by the guardrail: ' + t.reason), { data: { trace: t.trace } });
   const t0 = now();
   await storeMedia(media);
@@ -705,7 +761,7 @@ async function createReport(b, trace) {
   }
   const r = {
     id: rid('R', 5), user: u.id, category: t.category, userCategory: userCat || null, dept: t.deptKey, caption: t.caption, description: t.description, address: address || (t.geo ? t.geo.display : ''),
-    path: u.path, lat, lng, locSource, geo: t.geo, media, afterMedia: [], votes: {}, comments: [], flags: {}, supporters: [], status: 'open', createdAt: now(), timeline: [], resVotes: {},
+    path: inp.locPath && inp.locPath.length >= 2 ? inp.locPath : u.path, pathSource: inp.locPath && inp.locPath.length >= 2 ? 'issue location' : 'reporter area', levelIdx, lat, lng, locSource, geo: t.geo, media, afterMedia: [], votes: {}, comments: [], flags: {}, supporters: [], status: 'open', createdAt: now(), timeline: [], resVotes: {},
     sev: t.sev, slaDays: t.slaDays, ai: t.ai, needsReview: t.needsReview, reviewWhy: t.reviewWhy, privacyFlag: t.privacyFlag, trace: t.trace
   };
   r.votes[u.id] = { t: now(), confirmed: locSource === 'gps' };
@@ -714,7 +770,10 @@ async function createReport(b, trace) {
   addTL(r, t.sev ? `AI triage: ${CATS[r.category].label}, ${sevName(t.sev)} severity (${t.sev}/5), SLA ${t.slaDays} days.` : 'AI triage unavailable or unsure: queued for human review.');
   addTL(r, `Auto-routed to ${LEVEL_NAMES[assigned(r)]} authority · ${deptName(r.dept)}.`);
   r.score = score(r);
-  db.reports[r.id] = r; save();
+  db.reports[r.id] = r;
+  const lv = assigned(r);
+  notify(r.path.slice(0, lv + 1), 'new_report', `New ${sevName(r.sev).toLowerCase()} report: "${r.caption}" (${CATS[r.category].label}) at ${r.address || 'a pinned location'}.`, { reportId: r.id, dept: r.dept, level: lv });
+  save();
   return { merged: false, report: view(r, u.id), trace: t.trace };
 }
 
@@ -740,6 +799,13 @@ R('POST', /^\/api\/reports$/, async ({ body: b }) => {
   finally { prog.done = true; }
 });
 
+R('POST', /^\/api\/reports\/([\w-]+)\/withdraw$/, ({ m, body: b }) => {
+  const u = needUser(b.user, 'citizen');
+  const r = db.reports[m[1]]; if (!r || r.withdrawn) throw err(404, 'Report not found');
+  if (r.user !== u.id) throw err(403, 'You can only remove your own reports.');
+  r.withdrawn = true; r.withdrawnAt = now(); addTL(r, 'Withdrawn by the reporter.'); save();
+  return { ok: true };
+});
 R('POST', /^\/api\/reports\/([\w-]+)\/upvote$/, ({ m, body: b }) => {
   const u = needUser(b.user, 'citizen'); notSuspended(u);
   const r = db.reports[m[1]]; if (!r) throw err(404, 'Not found');
@@ -812,7 +878,7 @@ R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
 
 R('GET', /^\/api\/notices$/, ({ q }) => {
   const u = needUser(q.user, 'authority');
-  return db.notices.filter(n => isPrefix(u.path, n.path)).sort((a, b) => b.t - a.t).slice(0, 100);
+  return db.notices.filter(n => isPrefix(u.path, n.path) && (n.kind !== 'new_report' || (n.level === u.level && (u.dept === 'all' || n.dept === u.dept)))).sort((a, b) => b.t - a.t).slice(0, 100);
 });
 R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
   const u = needUser(b.user, 'authority');

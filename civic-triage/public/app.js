@@ -111,6 +111,43 @@ function getGps() {
 }
 async function curPos() { if (!GPS) GPS = await getGps(); return GPS; }
 
+// ---------- maps (Leaflet + OpenStreetMap tiles) ----------
+// Centre on the viewer's real location if known; else fit existing reports; else all of India. Never a hardcoded city.
+const SEVCOL = { Critical: '#991b1b', High: '#ea580c', Medium: '#ca8a04', Low: '#16a34a', Unrated: '#64748b' };
+const INDIA = [[6.5, 68.0], [35.7, 97.4]];
+const maps = {};
+function makeMap(id) {
+  const el = document.getElementById(id);
+  if (!window.L || !el) return null;
+  if (maps[id]) { try { maps[id].remove(); } catch (e) { } }
+  const m = L.map(el, { scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(m);
+  maps[id] = m; setTimeout(() => m.invalidateSize(), 60);
+  return m;
+}
+function showPins(id, list, center) {
+  const m = makeMap(id); if (!m) return;
+  const pts = list.filter(r => r.lat != null && r.lng != null);
+  for (const r of pts) {
+    L.circleMarker([r.lat, r.lng], { radius: 8, color: '#fff', weight: 2, fillColor: SEVCOL[r.severity] || SEVCOL.Unrated, fillOpacity: .95 }).addTo(m)
+      .bindPopup(`<b>${esc(r.caption)}</b><br>${esc(r.severity)}${r.sev ? ' · ' + r.sev + '/5' : ''} · ${esc(STAT[r.status] || r.status)}`);
+  }
+  if (center) { m.setView([center.lat, center.lng], 14); L.circleMarker([center.lat, center.lng], { radius: 6, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(m).bindTooltip('You are here'); }
+  else if (pts.length) m.fitBounds(L.latLngBounds(pts.map(r => [r.lat, r.lng])).pad(0.3), { maxZoom: 16 });
+  else m.fitBounds(INDIA);
+}
+const legendHtml = () => window.L ? `<div class="legend">${Object.entries(SEVCOL).map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('')}</div>` : '';
+// report page: tap the map to drop / move the pin (labelled "location set manually")
+function mountPinMap() {
+  const m = makeMap('r-map'); if (!m) return;
+  let mk = null;
+  const place = p => { if (!mk) mk = L.marker([p.lat, p.lng], { draggable: true }).addTo(m).on('dragend', e => { const q = e.target.getLatLng(); setRpos({ lat: q.lat, lng: q.lng }, 'manual', 'pin moved on map'); }); else mk.setLatLng([p.lat, p.lng]); };
+  window.onRposChange = p => { if (page !== 'report') return; place(p); m.setView([p.lat, p.lng], Math.max(m.getZoom() || 0, 16)); };
+  m.on('click', e => setRpos({ lat: e.latlng.lat, lng: e.latlng.lng }, 'manual', 'pin dropped on map'));
+  if (rpos) window.onRposChange(rpos); else if (GPS) m.setView([GPS.lat, GPS.lng], 16); else m.fitBounds(INDIA);
+  m.getContainer().insertAdjacentHTML('afterend', '<div class="meta" id="r-maphint">Tap the map to drop a pin on the exact spot (drag to adjust).</div>');
+}
+
 // ---------- feed ----------
 async function feed() {
   const cit = ME.role === 'citizen';
@@ -126,7 +163,7 @@ async function feed() {
    <select id="f-sort">${[['priority', 'Top priority'], ['votes', 'Most upvoted'], ['new', 'Newest'], ['old', 'Oldest']].map(([v, l]) => `<option value="${v}" ${filters.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
    <select id="f-st">${[['open', 'Unresolved'], ['', 'All'], ['resolved', 'Resolved'], ['in_progress', 'In progress']].map(([v, l]) => `<option value="${v}" ${filters.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
    <select id="f-cat"><option value="">All categories</option>${Object.entries(H.cats).map(([k, c]) => `<option value="${k}" ${filters.cat === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
-   <input id="f-q" placeholder="Search…" value="${esc(filters.q)}" style="max-width:160px"></div></div><div id="list"><div class="meta">Loading…</div></div>`;
+   <input id="f-q" placeholder="Search…" value="${esc(filters.q)}" style="max-width:160px"></div><div id="fmap" class="map"></div>${legendHtml()}</div><div id="list"><div class="meta">Loading…</div></div>`;
   ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || 5; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = $('#f-cat').value; loadList(); }; });
   $('#f-q').oninput = e => { filters.q = e.target.value; clearTimeout(feed.t); feed.t = setTimeout(loadList, 300); };
   loadList();
@@ -143,6 +180,7 @@ async function loadList() {
   if (!cit) { const sc = ($('#f-scope') || {}).value || 'mine'; p.set('scope', sc === 'mine' ? 'mine' : 'all'); if (sc === 'removed') p.set('removed', '1'); }
   try {
     const l = await api('GET', '/api/reports?' + p);
+    showPins('fmap', l, cit && useGps && GPS ? GPS : null);
     $('#list').innerHTML = l.length ? l.map(card).join('') : `<div class="card meta">No reports yet. ${cit ? 'Try a bigger radius, or be the first to report one.' : ''}</div>`;
   } catch (e) { $('#list').innerHTML = `<div class="card warn">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
@@ -399,7 +437,7 @@ function fillDepth() {
 async function loadDash() {
   const d = await api('GET', `/api/dashboard?path=${encodeURIComponent(dpath.join('|'))}&depth=${ddepth || ''}`);
   const s = d.summary, mine = ME.path.join('>');
-  $('#dbody').innerHTML = `<div class="tiles">
+  $('#dbody').innerHTML = `<div class="card"><h3>🗺️ Issues map</h3><div id="dmap" class="map"></div>${legendHtml()}</div><div class="tiles">
   <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b style="color:var(--ok)">${s.resolved}</b><span>AI-verified fixed</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div>
   <div class="tile"><b>${s.inProgress}</b><span>In progress</span></div><div class="tile"><b style="color:var(--bad)">${s.overdue}</b><span>Past SLA</span></div><div class="tile"><b>${s.critical}</b><span>Critical open</span></div>
   <div class="tile"><b>${s.claimedRate}%</b><span>Claimed closure rate</span></div><div class="tile"><b style="color:var(--ok)">${s.verifiedRate}%</b><span>AI-verified closure rate</span></div><div class="tile"><b style="color:var(--bad)">${s.rejected}</b><span>Closure claims rejected by AI</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
@@ -408,5 +446,6 @@ async function loadDash() {
   <td style="min-width:90px"><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
   <div class="card"><h3>🏢 Department-wise: claimed vs AI-verified closures</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Claimed fixed</th><th>AI-verified</th><th>Gap</th><th>Rejected by AI</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td>${x.claimed}/${x.total} <span class="meta">(${x.claimedRate}%)</span></td><td><b style="color:var(--ok)">${x.verified}/${x.total}</b> <span class="meta">(${x.verifiedRate}%)</span><div class="bar"><i style="width:${x.verifiedRate}%"></i></div></td><td>${Math.max(0, x.claimedRate - x.verifiedRate)} pts</td><td>${x.rejected}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
   <div class="card"><h3>🧩 By issue type</h3>${d.cats.length ? `<table><tr><th>Type</th><th>Total</th><th>Resolved</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>`;
+  showPins('dmap', d.points || [], GPS);
 }
 window.nav = nav;

@@ -526,7 +526,8 @@ function dashboard(pre, depth) {
   }).sort((a, b) => b.perf - a.perf || b.total - a.total).map((x, i) => ({ ...x, rank: i + 1 }));
   const depts = Object.keys(DEPTS).map(k => ({ dept: k, label: DEPTS[k], ...stats(list.filter(r => r.dept === k)) })).filter(x => x.total);
   const cats = Object.keys(CATS).map(k => ({ cat: k, label: CATS[k].label, ...stats(list.filter(r => r.category === k)) })).filter(x => x.total);
-  return { path: pre, depth: d, summary: stats(list), ranking, depts, cats };
+  const points = list.filter(r => r.lat != null).slice(0, 500).map(r => ({ id: r.id, lat: r.lat, lng: r.lng, severity: sevLabel(r), sev: r.sev || null, status: r.status, caption: r.caption }));
+  return { path: pre, depth: d, summary: stats(list), ranking, depts, cats, points };
 }
 
 // ---------- API handlers ----------

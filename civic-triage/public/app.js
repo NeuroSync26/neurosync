@@ -76,6 +76,9 @@ const ICP = {
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  locate: '<path d="m3 11 19-9-9 19-2-8-8-2z"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
@@ -144,24 +147,30 @@ function mountPicker(el, o) {
 
 // ---------- welcome / register ----------
 async function welcome() {
-  $('#app').innerHTML = `<section class="hero">
-   <div class="kicker">Civic grievance platform</div>
-   <h1>Every complaint closed with proof.</h1>
+  $('#app').innerHTML = `<div class="hero-wrap"><section class="hero"><div class="hero-txt">
+   <div class="kicker"><span class="dot"></span>Civic grievance platform</div>
+   <h1>Every complaint<br><span class="grad">closed with proof.</span></h1>
    <p class="lead">Citizens report issues with a photo. An AI agent checks, classifies and routes each report to the responsible authority. A complaint counts as fixed only after the AI matches before and after photos taken at the same spot.</p>
    <div class="cta"><button class="btn pri lg" onclick="register('citizen')">Report an issue ${ic('arrow')}</button><button class="btn lg" onclick="register('authority')">Register as authority</button></div>
    <div class="signin"><span>Have an ID?</span><input id="oldid" placeholder="CZ-1A2B3C" aria-label="Your ID" onkeydown="if(event.key==='Enter')signin()"><button class="btn" onclick="signin()">Sign in</button><button class="linkbtn" onclick="aadhaarLogin()">Forgot your ID?</button></div>
-  </section>
+  </div>
+  <div class="flow" aria-hidden="true">
+   <div class="fl c1">${ic('camera')}<div><b>Photo reported</b><span>Location from GPS or a map pin</span></div></div>
+   <div class="fl c2">${ic('shield')}<div><b>AI checks the report</b><span>Content, category, severity</span></div></div>
+   <div class="fl c3">${ic('landmark')}<div><b>Routed to the right office</b><span>Local, district, state or national</span></div></div>
+   <div class="fl c4">${ic('check')}<div><b>Fix verified by AI</b><span>Before and after photos must match</span></div></div>
+  </div></section></div>
   <section class="stats" id="hstats"></section>
   <section class="how">
-   <div><span class="mono">01</span><b>Report</b><p>Photo and location from GPS, the photo itself, or a map pin.</p></div>
-   <div><span class="mono">02</span><b>AI triage</b><p>Content check, image analysis, second review, duplicate check and routing. Every step is recorded.</p></div>
-   <div><span class="mono">03</span><b>Verified fix</b><p>Before/after photo comparison plus a distance check. Claimed and verified closures are reported separately.</p></div>
+   <div><span class="hi h1">${ic('camera')}</span><b>Report</b><p>Photo and location from GPS, the photo itself, or a map pin.</p></div>
+   <div><span class="hi h2">${ic('shield')}</span><b>AI triage</b><p>Content check, image analysis, second review, duplicate check and routing. Every step is recorded.</p></div>
+   <div><span class="hi h3">${ic('check')}</span><b>Verified fix</b><p>Before/after photo comparison plus a distance check. Claimed and verified closures are reported separately.</p></div>
   </section>`;
   try {
     const s = (await api('GET', '/api/dashboard?path=India')).summary;
     if (page === 'welcome' && $('#hstats')) { $('#hstats').innerHTML = `<div><b class="mono" data-count="${s.total}">${s.total}</b><span>Issues reported</span></div><div><b class="mono" data-count="${s.claimed}">${s.claimed}</b><span>Claimed fixed</span></div><div><b class="mono" data-count="${s.verified}">${s.verified}</b><span>Verified fixed</span></div><div><b class="mono" data-count="${s.rejected}">${s.rejected}</b><span>False closures caught</span></div>`; animIn('#hstats > div', { stagger: .07 }); countUp('#hstats'); }
   } catch (e) { /* stats are optional */ }
-  revealOnScroll('.how > div');
+  revealOnScroll('.how > div'); animIn('.flow .fl', { x: 24, y: 0, stagger: .12, delay: .15, duration: .5 });
 }
 async function signin() {
   try { ME = await api('GET', '/api/users/' + $('#oldid').value.trim()); localStorage.setItem('uid', ME.id); nav('feed'); } catch (e) { toast(e.message); }
@@ -213,23 +222,33 @@ async function curPos() { if (!GPS) GPS = await getGps(); return GPS; }
 const SEVCOL = { Critical: '#991b1b', High: '#ea580c', Medium: '#ca8a04', Low: '#16a34a', Unrated: '#64748b' };
 const INDIA = [[6.5, 68.0], [35.7, 97.4]];
 const maps = {};
-// Esri Canvas basemaps (no API key): light gray or dark gray base plus a matching label layer.
-const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
-const isDark = () => document.documentElement.dataset.theme === 'dark';
-const tileUrl = () => `${ESRI}World_${isDark() ? 'Dark' : 'Light'}_Gray_Base/MapServer/tile/{z}/{y}/{x}`;
-const labelUrl = () => `${ESRI}World_${isDark() ? 'Dark' : 'Light'}_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
-function retheme() { for (const m of Object.values(maps)) { try { m._tiles.setUrl(tileUrl()); m._labels.setUrl(labelUrl()); } catch (e) { } } }
+// OpenStreetMap standard tiles (full detail). Dark mode is rendered with a CSS filter tuned for readability.
 function makeMap(id) {
   const el = document.getElementById(id);
   if (!window.L || !el) return null;
   if (maps[id]) { try { maps[id].remove(); } catch (e) { } }
-  const m = L.map(el, { scrollWheelZoom: true, wheelPxPerZoomLevel: 90, zoomSnap: 0.5 });
-  m._tiles = L.tileLayer(tileUrl(), { maxNativeZoom: 16, maxZoom: 19, attribution: 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors' }).addTo(m);
-  m.createPane('labels'); m.getPane('labels').style.zIndex = 350; m.getPane('labels').style.pointerEvents = 'none';
-  m._labels = L.tileLayer(labelUrl(), { maxNativeZoom: 16, maxZoom: 19, pane: 'labels' }).addTo(m);
+  const m = L.map(el, { scrollWheelZoom: true, wheelPxPerZoomLevel: 90 });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(m);
+  const Locate = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd() {
+      const a = L.DomUtil.create('a', 'leaflet-bar-part locate-btn'), box = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+      a.href = '#'; a.title = 'Go to my location'; a.setAttribute('aria-label', 'Go to my location'); a.innerHTML = ic('locate'); box.appendChild(a);
+      L.DomEvent.on(a, 'click', async e => {
+        L.DomEvent.stop(e); a.classList.add('busy');
+        const p = await getGps(); a.classList.remove('busy');
+        if (!p) return toast('Location access is off. Allow it in your browser settings.');
+        GPS = p; m.setView([p.lat, p.lng], 16);
+        if (m._me) m._me.setLatLng([p.lat, p.lng]); else m._me = L.circleMarker([p.lat, p.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(m).bindTooltip('You are here');
+      });
+      return box;
+    }
+  });
+  m.addControl(new Locate());
   maps[id] = m; setTimeout(() => m.invalidateSize(), 60);
   return m;
 }
+function retheme() { /* tiles are restyled by CSS when the theme changes */ }
 function showPins(id, list, center) {
   const m = makeMap(id); if (!m) return;
   const pts = list.filter(r => r.lat != null && r.lng != null);
@@ -237,7 +256,7 @@ function showPins(id, list, center) {
     L.circleMarker([r.lat, r.lng], { radius: 8, color: '#fff', weight: 2, fillColor: SEVCOL[r.severity] || SEVCOL.Unrated, fillOpacity: .95 }).addTo(m)
       .bindPopup(`<b>${esc(r.caption)}</b><br>${esc(r.severity)}${r.sev ? ' · ' + r.sev + '/5' : ''} · ${esc(STAT[r.status] || r.status)}`);
   }
-  if (center) { m.setView([center.lat, center.lng], 14); L.circleMarker([center.lat, center.lng], { radius: 6, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(m).bindTooltip('You are here'); }
+  if (center) { m.setView([center.lat, center.lng], 14); m._me = L.circleMarker([center.lat, center.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(m).bindTooltip('You are here'); }
   else if (pts.length) m.fitBounds(L.latLngBounds(pts.map(r => [r.lat, r.lng])).pad(0.3), { maxZoom: 16 });
   else m.fitBounds(INDIA);
 }
@@ -279,7 +298,8 @@ async function toggleGps() {
   if (!useGps) { const p = await curPos(); if (!p) return toast('Location access is off. Allow it in your browser settings.'); useGps = true; } else useGps = false;
   feed();
 }
-async function loadList() {
+setInterval(() => { if (page === 'feed' && ME && $('#modal').hidden && !document.hidden) loadList(true); }, 30000); // keep queues fresh
+async function loadList(silent) {
   const cit = ME.role === 'citizen';
   const p = new URLSearchParams({ user: ME.id, sort: filters.sort, status: filters.status, cat: filters.cat, q: filters.q, radius: filters.radius });
   if (cit && useGps && GPS) { p.set('lat', GPS.lat); p.set('lng', GPS.lng); }
@@ -287,8 +307,8 @@ async function loadList() {
   try {
     const l = await api('GET', '/api/reports?' + p);
     showPins('fmap', l, cit && useGps && GPS ? GPS : null);
-    $('#list').innerHTML = (l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : 'Nothing is waiting in this view.'}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`);
-    animIn('#list > *', { stagger: .06 });
+    $('#list').innerHTML = (l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : `Reports appear here when citizens send them to the ${H.levelNames[ME.level]} level in ${esc(ME.path.slice(-1)[0])}${ME.dept === 'all' ? '' : ' for ' + esc(H.depts[ME.dept])}. Try "All in jurisdiction".`}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`);
+    if (!silent) animIn('#list > *', { stagger: .06 });
   } catch (e) { $('#list').innerHTML = `<div class="note bad">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
 function mediaHtml(l) {
@@ -308,7 +328,7 @@ function card(r) {
    <h3>${esc(r.caption)}</h3>
    ${r.description ? `<p class="desc">${esc(r.description)}</p>` : ''}
    ${r.ai ? `<p class="ai">${esc(r.ai.reasoning)}</p>` : ''}
-   <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km` : ''}</span><span>${ic('landmark')}${r.assignedName} · ${dept} · SLA ${r.slaDays}d</span></div>
+   <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km` : ''}</span><span>${ic('landmark')}${r.assignedName} authority, ${esc((r.areaPath || []).slice(-2).join(', '))} · ${dept} · SLA ${r.slaDays}d</span></div>
    ${r.afterMedia.length ? `<div class="ba"><figure>${img ? `<img src="${img.url}" alt="">` : ''}<figcaption>Before</figcaption></figure><figure><img src="${r.afterMedia[0].url}" alt=""><figcaption>After</figcaption></figure></div>` : ''}
    ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">${ic(VICON[r.verdict.result] || 'alert')}<div><b>${VLABEL[r.verdict.result] || esc(r.verdict.result)}</b><span class="vmeta">${r.verdict.by === 'ai' ? `Confidence ${Math.round(r.verdict.confidence * 100)}%` : r.verdict.by === 'integrity' ? 'Integrity check' : 'Not checked by AI'}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from the reported spot` : ''}</span><span>${esc(r.verdict.reason)}</span></div></div>` : ''}
    ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="confirm"><span>Is it fixed? ${r.resolutionVotes.ok} yes · ${r.resolutionVotes.bad} no</span><button class="btn sm ${r.myResVote === true ? 'on' : ''}" onclick="resVote('${r.id}',true)">Yes</button><button class="btn sm ${r.myResVote === false ? 'on' : ''}" onclick="resVote('${r.id}',false)">No</button></div>` : ''}
@@ -319,6 +339,7 @@ function card(r) {
     <span class="grow"></span>
     ${r.confirmed ? `<span class="meta">${r.confirmed} confirmed on site</span>` : ''}${r.merged ? `<span class="meta">${r.reporters} reports merged</span>` : ''}
     ${cit && !r.mine && !r.flagged ? `<button class="ghost danger" onclick="flag('${r.id}')" title="Report as false">${ic('flag')}</button>` : ''}
+    ${cit && r.mine ? `<button class="ghost danger" onclick="withdraw('${r.id}')">${ic('trash')}Remove</button>` : ''}
    </div>
    ${!cit && r.status !== 'resolved' ? `<div class="authbar">${authActions(r)}</div>` : ''}
   </div></article>`;
@@ -338,6 +359,11 @@ async function flag(id) {
   if (!confirm('Flag this post as false / misleading? Posts flagged by ' + H.config.flagsToRemove + ' citizens are removed and the author is reported to authorities.')) return;
   try { const r = await api('POST', `/api/reports/${id}/flag`, { user: ME.id }); toast(r.removed ? 'Post removed and authorities notified' : 'Thanks – flagged'); loadList(); } catch (e) { toast(e.message); }
 }
+function withdraw(id) {
+  modal(`<h3>Remove this report?</h3><p class="meta">It will be removed from the feed, map and dashboards and can't be restored.</p>
+  <div class="formfoot" style="margin-top:18px"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger-solid" onclick="doWithdraw('${id}')">Remove report</button></div>`);
+}
+async function doWithdraw(id) { try { await api('POST', `/api/reports/${id}/withdraw`, { user: ME.id }); closeModal(); toast('Report removed'); page === 'profile' ? profile() : loadList(); } catch (e) { toast(e.message); } }
 async function resVote(id, ok) { try { await api('POST', `/api/reports/${id}/community-verify`, { user: ME.id, ok }); loadList(); } catch (e) { toast(e.message); } }
 async function act(id, action) { try { await api('POST', `/api/reports/${id}/status`, { user: ME.id, action }); toast('Updated'); loadList(); } catch (e) { toast(e.message); } }
 async function openTimeline(id) {
@@ -440,6 +466,7 @@ function report() {
    <section class="fsec"><div class="fsec-h"><span class="mono">02</span><b>Details</b></div>
     <div class="field"><label>Title</label><input id="r-cap" maxlength="140" placeholder="e.g. Deep pothole outside the main gate"></div>
     <div class="field"><label>Description <span class="opt">optional</span></label><textarea id="r-desc" rows="3" maxlength="1000"></textarea></div>
+    <div class="field"><label>Who should handle this?</label><select id="r-level"><option value="local">Local authority (city / block)</option><option value="district">District authority</option><option value="state">State authority</option><option value="national">National authority</option></select></div>
     <div class="field"><label>Category</label><select id="r-cat"><option value="">Detect automatically</option>${catsSorted().map(([k, c]) => `<option value="${k}">${esc(c.label)}</option>`).join('')}</select></div></section>
    <section class="fsec"><div class="fsec-h"><span class="mono">03</span><b>Location</b></div>
     <div class="locbox" id="r-loc">Not set</div>
@@ -523,7 +550,6 @@ function setBar(text, pct, state, action) {
   $('#upfill').style.width = Math.max(2, Math.min(100, pct || 0)) + '%';
   const a = $('#upact');
   if (action) { a.hidden = false; a.textContent = action.label; a.onclick = action.fn; } else a.hidden = true;
-  $('#upclose').hidden = !(state === 'ok' || state === 'err');
 }
 function hideBar(delay) { clearTimeout(setBar.fade); setBar.fade = setTimeout(() => { const b = $('#upbar'); b.className += ' hide'; setTimeout(() => { if (b.className.includes('hide')) b.hidden = true; }, 450); }, delay || 0); }
 function sendUpload() {
@@ -575,6 +601,7 @@ function upFail(msg, trace, canRetry) {
   setBar('Not uploaded: ' + msg.replace(/^Report rejected by the guardrail: /, ''), 100, 'err',
     canRetry ? { label: 'Retry', fn: () => { UP = Object.assign(failed, { finished: false, uploaded: false, started: Date.now() }); sendUpload(); } }
       : trace && trace.length ? { label: 'Details', fn: () => modal(`<h3>Why it was not published</h3>${traceHtml(trace)}`) } : null);
+  if (!canRetry) hideBar(9000);
 }
 function resumeUpload() {
   let s = null; try { s = JSON.parse(localStorage.getItem(UPKEY) || 'null'); } catch (e) { }
@@ -588,7 +615,7 @@ async function submitReport() {
   if (!$('#r-cap').value.trim()) return toast('Add a title');
   if (!rpos) return toast('Set the location');
   const clientId = 'sub-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-  const body = { clientId, user: ME.id, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
+  const body = { clientId, user: ME.id, level: $('#r-level').value, category: $('#r-cat').value, caption: $('#r-cap').value, description: $('#r-desc').value, address: $('#r-addr').value, media: pending, lat: rpos.lat, lng: rpos.lng, locSource: rpos.source, gps: rpos.source === 'gps' };
   UP = { clientId, body, started: Date.now(), files: pending.length, hasVideo: pending.some(m => m.type === 'video'), hasAddress: !!body.address.trim() };
   setBar('Preparing upload', 2);
   pending = []; rpos = null;
@@ -626,15 +653,46 @@ async function nres(id, action) { try { await api('POST', `/api/notices/${id}/re
 async function profile() {
   ME = await api('GET', '/api/users/' + ME.id);
   const cit = ME.role === 'citizen', loc = ME.path.slice(1);
-  const mine = cit ? (await api('GET', `/api/reports?user=${ME.id}&radius=100&status=&sort=new`)).filter(r => r.mine) : [];
-  $('#app').innerHTML = `<div class="narrow"><div class="pagehead"><div><h1>Account</h1></div><button class="btn" onclick="signout()">${ic('logout')} Sign out</button></div>
+  const mine = cit ? await api('GET', `/api/reports?user=${ME.id}&mine=1&status=&sort=new`) : [];
+  $('#app').innerHTML = `<div class="narrow"><div class="pagehead"><div><h1>Account</h1></div><div class="row"><button class="btn" onclick="editAccount()">${ic('edit')} ${cit ? 'Edit area' : 'Edit role and jurisdiction'}</button><button class="btn" onclick="signout()">${ic('logout')} Sign out</button></div></div>
   <div class="card"><dl class="kv wide"><dt>ID</dt><dd class="mono">${esc(ME.id)}</dd><dt>Role</dt><dd>${cit ? 'Citizen' : `${esc(ME.office)} · ${H.levelNames[ME.level]} level · ${esc(ME.dept === 'all' ? 'All departments' : H.depts[ME.dept])}`}</dd>
    <dt>${cit ? 'Area' : 'Jurisdiction'}</dt><dd>${esc(loc.join(' / '))}</dd><dt>Aadhaar</dt><dd class="mono">${ME.aadhaarLast4 ? 'XXXX XXXX ' + esc(ME.aadhaarLast4) : 'Not linked'}</dd><dt>Phone</dt><dd>${esc(ME.phone)}</dd><dt>Email</dt><dd>${esc(ME.email)}</dd><dt>Member since</dt><dd>${new Date(ME.createdAt).toLocaleDateString()}</dd></dl>
-  ${ME.suspendedUntil > Date.now() ? `<div class="note warn">Suspended until ${new Date(ME.suspendedUntil).toLocaleString()}</div>` : ''}</div>
+  ${ME.suspendedUntil > Date.now() ? `<div class="note warn">Suspended until ${new Date(ME.suspendedUntil).toLocaleString()}</div>` : ''}
+  <div class="danger-zone"><div><b>Delete account</b><p class="meta">Removes your account. Your reports stay public but anonymous.</p></div><button class="btn danger" onclick="deleteAccount()">Delete account</button></div></div>
   ${cit ? `<div class="stats small"><div><b class="mono" data-count="${ME.stats.reports}">${ME.stats.reports}</b><span>Reports</span></div><div><b class="mono" data-count="${ME.stats.resolved}">${ME.stats.resolved}</b><span>Verified fixed</span></div><div><b class="mono" data-count="${ME.stats.upvotes}">${ME.stats.upvotes}</b><span>Upvotes received</span></div><div><b class="mono" data-count="${ME.strikes}">${ME.strikes}</b><span>Strikes</span></div></div>
   <h2 class="sec">Your reports</h2>${mine.map(card).join('') || `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>Reports you submit appear here.</span></div>`}` : ''}</div>`;
 }
 function signout() { localStorage.removeItem('uid'); ME = null; nav('welcome'); }
+let editState;
+function editAccount() {
+  const au = ME.role === 'authority';
+  editState = { path: ME.path.slice(), ok: true, level: au ? ME.level : 3 };
+  modal(`<h3>${au ? 'Edit role and jurisdiction' : 'Edit area'}</h3>
+  ${au ? `<div class="field"><label>Level</label><select id="e-lvl">${H.levelNames.map((n, i) => `<option value="${i}" ${i === ME.level ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+  <div class="field"><label>Department</label><select id="e-dept"><option value="all">All departments</option>${deptsSorted().map(([k, v]) => `<option value="${k}" ${ME.dept === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+  <div class="field"><label>Office name <span class="opt">optional</span></label><input id="e-office" value="${esc(ME.office || '')}"></div>` : ''}
+  <div id="e-pick"></div><div id="e-err" style="margin-top:12px"></div>
+  <div class="formfoot" style="margin-top:18px"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="e-go" onclick="saveAccount()">Save changes</button></div>`);
+  const mount = (init) => mountPicker($('#e-pick'), { min: au ? editState.level + 1 : 4, max: au ? editState.level + 1 : 5, initial: init, onChange: (p, ok) => { editState.path = p; editState.ok = ok; } });
+  if (au) $('#e-lvl').onchange = e => { editState.level = +e.target.value; mount(ME.path.slice(0, editState.level + 1)); };
+  mount(ME.path.slice());
+}
+async function saveAccount() {
+  const show = m => { $('#e-err').innerHTML = `<div class="note bad">${esc(m)}</div>`; };
+  if (!editState.ok) return show('Select the location fully.');
+  const b = { path: editState.path };
+  if (ME.role === 'authority') Object.assign(b, { level: editState.level, dept: $('#e-dept').value, office: $('#e-office').value });
+  try { ME = await api('PATCH', '/api/users/' + ME.id, b); closeModal(); toast('Changes saved'); profile(); } catch (e) { show(e.message); }
+}
+function deleteAccount() {
+  modal(`<h3>Delete your account?</h3><p class="meta">This can't be undone. You will need to register again with your Aadhaar number to use the app.</p>
+  <div class="field"><label>Type DELETE to confirm</label><input id="d-confirm" autocomplete="off"></div><div id="d-err" style="margin-top:12px"></div>
+  <div class="formfoot" style="margin-top:18px"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger-solid" onclick="doDelete()">Delete account</button></div>`);
+}
+async function doDelete() {
+  try { await api('DELETE', '/api/users/' + ME.id, { confirm: $('#d-confirm').value.trim() }); localStorage.removeItem('uid'); ME = null; closeModal(); toast('Account deleted'); nav('welcome'); }
+  catch (e) { $('#d-err').innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+}
 const _profile = profile; profile = async function () { await _profile(); countUp('#app'); animIn('#app > .narrow > *'); };
 
 // ---------- dashboard ----------

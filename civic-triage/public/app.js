@@ -492,11 +492,12 @@ async function findAddr() {
 }
 function pickAddr(i) { const x = window._geo[i]; setRpos(x, 'manual', x.display); $('#r-results').innerHTML = ''; }
 const STEPS = [['guardrail', 'Content check'], ['perceive', 'Image analysis'], ['critic', 'Second review'], ['geolocate', 'Address lookup'], ['dedupe', 'Duplicate check'], ['route', 'Priority and routing'], ['publish', 'Publish']];
-const STEPNAME = Object.fromEntries(STEPS);
+const RSTEPS = [['v_photo', 'After photo check'], ['v_distance', 'Distance check'], ['v_compare', 'Before and after comparison'], ['v_decision', 'Decision']];
+const STEPNAME = Object.fromEntries(STEPS.concat(RSTEPS));
 const SICON = { ok: 'check', warn: 'alert', fail: 'xcircle', rejected: 'xcircle', skipped: 'arrow' };
-function traceHtml(trace, live) {
+function traceHtml(trace, live, steps = STEPS) {
   if (!trace || (!trace.length && !live)) return '';
-  const rows = live ? STEPS.map(([k]) => trace.find(t => t.step === k) || { step: k, status: 'pending' }) : trace;
+  const rows = live ? steps.map(([k]) => trace.find(t => t.step === k) || { step: k, status: 'pending' }) : trace;
   let running = false;
   return `<ol class="trace">${rows.map(t => {
     let st = t.status;
@@ -535,6 +536,7 @@ async function doAadhaarLogin() {
 let UP = null;
 const UPKEY = 'pendingUpload';
 function upStepText(step) {
+  if (UP && UP.kind === 'resolve') return { v_photo: 'Checking the after photo', v_distance: 'Checking the distance from the reported spot', v_compare: 'Comparing before and after photos', v_decision: 'Recording the result' }[step] || 'Verifying';
   return {
     guardrail: UP && UP.hasVideo ? 'Checking photos and videos' : 'Checking the photo',
     perceive: 'Analysing the issue in the photo', critic: 'Double-checking the result',
@@ -555,12 +557,12 @@ function setBar(text, pct, state, action) {
 function hideBar(delay) { clearTimeout(setBar.fade); setBar.fade = setTimeout(() => { const b = $('#upbar'); b.className += ' hide'; setTimeout(() => { if (b.className.includes('hide')) b.hidden = true; }, 450); }, delay || 0); }
 function sendUpload() {
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/reports'); xhr.setRequestHeader('content-type', 'application/json');
-  xhr.upload.onprogress = e => { if (e.lengthComputable && UP) setBar(`Uploading ${UP.hasVideo ? 'photos and videos' : UP.files > 1 ? UP.files + ' photos' : 'photo'}`, 3 + 27 * e.loaded / e.total); };
+  xhr.open('POST', UP.url || '/api/reports'); xhr.setRequestHeader('content-type', 'application/json');
+  xhr.upload.onprogress = e => { if (e.lengthComputable && UP) setBar(`Uploading ${UP.kind === 'resolve' ? 'after photo' : UP.hasVideo ? 'photos and videos' : UP.files > 1 ? UP.files + ' photos' : 'photo'}`, 3 + 27 * e.loaded / e.total); };
   xhr.upload.onload = () => {
     if (!UP) return; UP.uploaded = true;
-    try { localStorage.setItem(UPKEY, JSON.stringify({ clientId: UP.clientId, t: Date.now(), hasVideo: UP.hasVideo, hasAddress: UP.hasAddress })); } catch (e) { }
-    setBar(upStepText('guardrail'), 30); pollUpload();
+    if (UP.kind !== 'resolve') try { localStorage.setItem(UPKEY, JSON.stringify({ clientId: UP.clientId, t: Date.now(), hasVideo: UP.hasVideo, hasAddress: UP.hasAddress })); } catch (e) { }
+    setBar(upStepText(UP.kind === 'resolve' ? 'v_photo' : 'guardrail'), 30); pollUpload();
   };
   xhr.onload = () => {
     let j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) { }
@@ -578,18 +580,25 @@ function pollUpload() {
       const p = await api('GET', '/api/progress/' + UP.clientId);
       UP.trace = p.trace;
       if (p.done) return p.error ? upFail(p.error.message, p.trace) : upDone(p.result);
-      const next = STEPS.find(([k]) => !p.trace.some(t => t.step === k));
-      setBar(upStepText(next ? next[0] : 'publish'), 30 + 66 * p.trace.length / STEPS.length, '', { label: 'Details', fn: showUpDetails });
+      const steps = UP.kind === 'resolve' ? RSTEPS : STEPS, next = steps.find(([k]) => !p.trace.some(t => t.step === k));
+      setBar(upStepText(next ? next[0] : steps[steps.length - 1][0]), 30 + 66 * p.trace.length / steps.length, '', { label: 'Details', fn: showUpDetails });
     } catch (e) {
       if (e.status === 404 && UP.uploaded && Date.now() - UP.started > 20000) upFail('Could not confirm this upload. Check your reports under Account.', null);
     }
     if (UP && Date.now() - UP.started > 240000) upFail('This is taking too long. Check your reports under Account in a few minutes.', null);
   }, 900);
 }
-function showUpDetails() { modal(`<h3>How your report is being checked</h3>${traceHtml((UP && UP.trace) || [], !!UP && !UP.finished)}`); }
+function showUpDetails() { const rs = UP && UP.kind === 'resolve'; modal(`<h3>${rs ? 'How the fix is being verified' : 'How your report is being checked'}</h3>${traceHtml((UP && UP.trace) || [], !!UP && !UP.finished, rs ? RSTEPS : STEPS)}`); }
 function upDone(r) {
   if (!UP || UP.finished) return; UP.finished = true; clearInterval(pollUpload.t);
   try { localStorage.removeItem(UPKEY); } catch (e) { }
+  if (UP.kind === 'resolve') { // r is the updated report
+    const v = r.verdict || {}, trace = UP.trace || [], cap = r.caption || 'Report';
+    const msg = v.result === 'verified' ? 'Fix verified. Issue closed.' : v.result === 'not_fixed' ? 'Not fixed: ' + (v.reason || '') : 'Inconclusive. Recorded as claimed, not verified.';
+    setBar(msg, 100, v.result === 'not_fixed' ? 'err' : 'ok', { label: 'Details', fn: () => modal(`<h3>${esc(cap)}</h3><h4>How the fix was verified</h4>${traceHtml(trace)}`) });
+    UP = null; bounce('#upbar .uprow'); hideBar(v.result === 'verified' ? 4500 : 9000);
+    if (page === 'feed') loadList(); return;
+  }
   const rep = r.report || {}, trace = r.trace || UP.trace || [];
   setBar(r.merged ? 'Uploaded successfully. Merged with an existing report nearby.' : 'Uploaded successfully', 100, 'ok', { label: 'View', fn: () => { modal(`<h3>${esc(rep.caption || 'Report')}</h3><h4>How this report was checked</h4>${traceHtml(trace)}`); } });
   UP = null; bounce('#upbar .uprow'); hideBar(4500);
@@ -633,12 +642,14 @@ function resolveDialog(id) {
   <div class="formfoot" style="margin-top:18px"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="rgo" onclick="doResolve('${id}')">Submit for verification</button></div>`);
 }
 async function doResolve(id) {
-  $('#rgo').disabled = true; $('#rgo').textContent = 'Verifying…';
+  if (UP) return toast('Please wait for the current upload to finish.');
+  if (!pending.some(m => m.type === 'image')) return toast('Add an after photo');
+  $('#rgo').disabled = true; $('#rgo').textContent = 'Getting location…';
   const p = await getGps();
-  try {
-    const r = await api('POST', `/api/reports/${id}/status`, { user: ME.id, action: 'resolve', note: $('#rnote').value, media: pending, lat: p && p.lat, lng: p && p.lng });
-    closeModal(); const v = r.verdict || {}; toast(v.result === 'verified' ? 'Fix verified. Issue closed.' : v.result === 'not_fixed' ? 'Not fixed: ' + v.reason : 'Inconclusive. Recorded as claimed, not verified.'); loadList();
-  } catch (e) { toast(e.message); $('#rgo').disabled = false; $('#rgo').textContent = 'Submit for verification'; }
+  const clientId = 'res-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  UP = { kind: 'resolve', url: `/api/reports/${id}/status`, clientId, started: Date.now(), files: pending.length,
+    body: { clientId, user: ME.id, action: 'resolve', note: $('#rnote').value, media: pending, lat: p && p.lat, lng: p && p.lng } };
+  pending = []; closeModal(); setBar('Preparing upload', 2); sendUpload();
 }
 
 // ---------- notices (authority) ----------

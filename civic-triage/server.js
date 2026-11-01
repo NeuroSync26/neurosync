@@ -279,14 +279,18 @@ async function imgParts(media, max = 2) {
 // Returns { result: 'verified' | 'not_fixed' | 'inconclusive', by, confidence, reason, distanceM }.
 // A closure is VERIFIED only when the AI says "fixed" with enough confidence AND the after-photo was
 // taken near the reported spot. If the AI is unavailable or fails, the result is INCONCLUSIVE, never verified.
-async function verifyResolution(r, after, loc) {
-  if (after.some(a => r.media.some(b => b.hash === a.hash))) return { result: 'not_fixed', by: 'integrity', confidence: 1, reason: 'After-photo is identical to a "before" photo.' };
+async function verifyResolution(r, after, loc, trace = []) {
+  const st = (step, status, output, extra = {}) => trace.push({ step, status, output, ...extra });
+  if (after.some(a => r.media.some(b => b.hash === a.hash))) { st('v_photo', 'rejected', 'The after photo is identical to the original photo.'); return { result: 'not_fixed', by: 'integrity', confidence: 1, reason: 'After-photo is identical to a "before" photo.' }; }
+  st('v_photo', 'ok', `${after.length} new after photo${after.length > 1 ? 's' : ''} received.`);
   const d = km([loc.lat, loc.lng], r.lat != null ? [r.lat, r.lng] : null);
   const distanceM = d == null ? null : Math.round(d * 1000);
-  if (distanceM != null && distanceM > VERIFY_MAX_M) return { result: 'not_fixed', by: 'integrity', confidence: 1, distanceM, reason: `After-photo was taken ${distanceM} m from the reported spot (limit ${VERIFY_MAX_M} m).` };
-  const ai = await aiCompare(r, after);
-  if (!ai) return { result: 'inconclusive', by: 'none', confidence: 0, distanceM, reason: 'AI verification unavailable right now. Closure is recorded as CLAIMED, not verified.' };
+  if (distanceM != null && distanceM > VERIFY_MAX_M) { st('v_distance', 'rejected', `Taken ${distanceM} m from the reported spot (limit ${VERIFY_MAX_M} m).`); return { result: 'not_fixed', by: 'integrity', confidence: 1, distanceM, reason: `After-photo was taken ${distanceM} m from the reported spot (limit ${VERIFY_MAX_M} m).` }; }
+  st('v_distance', distanceM == null ? 'warn' : 'ok', distanceM == null ? 'Location of the after photo is unknown (no GPS).' : `Taken ${distanceM} m from the reported spot.`);
+  const t0 = now(), ai = await aiCompare(r, after);
+  if (!ai) { st('v_compare', 'warn', 'AI comparison unavailable. The closure is recorded as claimed, not verified.', { ms: now() - t0 }); return { result: 'inconclusive', by: 'none', confidence: 0, distanceM, reason: 'AI verification unavailable right now. Closure is recorded as CLAIMED, not verified.' }; }
   const conf = Math.max(0, Math.min(1, +ai.confidence || 0));
+  st('v_compare', 'ok', `${ai.fixed ? 'Looks fixed' : 'Not fixed'} (confidence ${Math.round(conf * 100)}%). ${ai.reason}`, { ms: now() - t0, source: ai.model });
   const base = { by: 'ai', confidence: conf, distanceM, reason: ai.reason, evidence: ai.evidence || [], model: ai.model };
   if (conf < VERIFY_MIN_CONF) return { ...base, result: 'inconclusive', reason: `AI not confident enough (${Math.round(conf * 100)}%): ${ai.reason}` };
   if (!ai.fixed) return { ...base, result: 'not_fixed' };
@@ -861,7 +865,7 @@ R('POST', /^\/api\/reports\/([\w-]+)\/community-verify$/, ({ m, body: b }) => {
   if (bad >= 3 && bad > ok) { r.status = 'reopened'; r.resolvedAt = null; addTL(r, `Reopened: ${bad} citizens say the issue is NOT fixed.`); notify(r.path, 'reopened', `Report ${r.id} reopened by community: resolution disputed by ${bad} citizens.`, { reportId: r.id }); }
   recompute(r); save(); return view(r, u.id);
 });
-R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
+async function updateStatus(m, b, trace) {
   const u = needUser(b.user, 'authority');
   const r = db.reports[m[1]]; if (!r) throw err(404, 'Not found');
   if (!isPrefix(u.path, r.path)) throw err(403, 'This report is outside your jurisdiction');
@@ -873,8 +877,9 @@ R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
     if (r.status === 'resolved') throw err(400, 'This issue is already AI-verified as fixed.');
     const after = parseMedia(b.media).filter(x => x.type === 'image');
     if (!after.length) throw err(400, 'Upload at least one "after" photo to close this issue');
-    const verdict = await verifyResolution(r, after, { lat: num(b.lat), lng: num(b.lng) });
+    const verdict = await verifyResolution(r, after, { lat: num(b.lat), lng: num(b.lng) }, trace);
     await storeMedia(after);
+    trace.push({ step: 'v_decision', status: verdict.result === 'verified' ? 'ok' : verdict.result === 'not_fixed' ? 'rejected' : 'warn', output: { verified: 'Fix verified. The issue is closed.', not_fixed: 'Closure rejected: the issue is not fixed.', inconclusive: 'Inconclusive: recorded as claimed, not verified.' }[verdict.result] });
     r.verdict = { ...verdict, t: now(), by_office: who };
     r.afterMedia = after; r.resVotes = {};
     r.claims = (r.claims || 0) + 1; r.claimedAt = now();
@@ -884,6 +889,21 @@ R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
     else { r.status = 'claimed'; addTL(r, `Verification INCONCLUSIVE: ${verdict.reason}`); }
   } else throw err(400, 'Unknown action');
   recompute(r); save(); return view(r, u.id);
+}
+// Status updates; a resolve with a clientId reports its verification steps through /api/progress like report uploads.
+R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
+  const cid = /^[\w-]{8,64}$/.test(b.clientId || '') ? b.clientId : null;
+  if (cid && PROG.has(cid)) {
+    const p = PROG.get(cid);
+    if (!p.done) throw err(409, 'This update is still being processed.');
+    if (p.error) throw err(p.error.code, p.error.message);
+    return p.result;
+  }
+  const prog = { trace: [], done: false, t: now() };
+  if (cid) PROG.set(cid, prog);
+  try { prog.result = await updateStatus(m, b, prog.trace); return prog.result; }
+  catch (e) { prog.error = { code: e.code || 500, message: e.message }; throw e; }
+  finally { prog.done = true; }
 });
 
 R('GET', /^\/api\/notices$/, ({ q }) => {

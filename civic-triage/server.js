@@ -24,10 +24,21 @@ const STRIKES_TO_SUSPEND = 2;     // removed posts -> account suspended (24h x s
 const VERIFY_MAX_M = 200;         // after-photo must be taken within 200 m of the reported spot
 const VERIFY_MIN_CONF = 0.6;      // AI confidence needed for a verified / not-fixed verdict
 const LEVEL_NAMES = ['National', 'State', 'District', 'Local'];
+// Routing is by department KEY only. These are generic function labels, not official department names.
 const DEPTS = {
-  roads: 'Roads & Bridges (PWD/NHAI)', water: 'Water Supply & Drainage', pollution: 'Pollution Control Board',
-  sanitation: 'Sanitation & Waste', electricity: 'Electricity & Street Lighting', general: 'General Administration'
+  roads: 'Roads & bridges', water: 'Water supply & drainage', pollution: 'Pollution',
+  sanitation: 'Sanitation & waste', electricity: 'Electricity & street lighting', general: 'General administration'
 };
+// Optional official names, only from published sources: env DEPARTMENTS_JSON or departments.json, e.g.
+// { "sanitation": { "name": "<official name>", "source": "<URL where it is published>" } }. Unconfigured keys show the generic label.
+let DEPT_CONFIG = {};
+try {
+  const raw = process.env.DEPARTMENTS_JSON || (fs.existsSync(path.join(__dirname, 'departments.json')) ? fs.readFileSync(path.join(__dirname, 'departments.json'), 'utf8') : '{}');
+  for (const [k, v] of Object.entries(JSON.parse(raw))) {
+    const name = typeof v === 'string' ? v : v && v.name, source = v && v.source;
+    if (DEPTS[k] && name && String(name).trim()) DEPT_CONFIG[k] = { name: String(name).trim().slice(0, 120), source: source ? String(source).slice(0, 300) : null };
+  }
+} catch (e) { console.warn('Ignoring invalid department config:', e.message); }
 const CATS = {
   pothole: { label: 'Road damage / pothole', dept: 'roads', base: 5, sla: 5 },
   bridge: { label: 'Bridge / flyover damage', dept: 'roads', base: 9, sla: 3 },
@@ -164,7 +175,7 @@ async function storeMedia(list) {
 }
 // flush pending writes when the host stops the service (e.g. Render redeploy)
 process.on('SIGTERM', async () => { clearTimeout(saveT); await flush(); process.exit(0); });
-const deptName = k => DEPTS[k] || k;
+const deptName = k => DEPT_CONFIG[k] ? DEPT_CONFIG[k].name : `${DEPTS[k] || k} (by category)`;
 function tokens(s) { return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 3)); }
 function jac(a, b) { if (!a.size || !b.size) return 0; let i = 0; for (const x of a) if (b.has(x)) i++; return i / (a.size + b.size - i); }
 
@@ -452,7 +463,7 @@ function view(r, uid) {
   const v = r.votes[uid];
   const ids = Object.values(r.votes);
   return {
-    id: r.id, category: r.category, categoryLabel: CATS[r.category].label, dept: r.dept, deptLabel: deptName(r.dept),
+    id: r.id, category: r.category, categoryLabel: CATS[r.category].label, dept: r.dept, deptLabel: deptName(r.dept), deptSource: DEPT_CONFIG[r.dept] ? DEPT_CONFIG[r.dept].source : null,
     caption: r.caption, description: r.description, address: r.address, path: r.path, lat: r.lat, lng: r.lng,
     media: r.media.map(m => ({ type: m.type, url: m.url })), afterMedia: (r.afterMedia || []).map(m => ({ type: m.type, url: m.url })),
     votes: ids.length, confirmed: ids.filter(x => x.confirmed).length, voted: !!v,
@@ -524,7 +535,7 @@ function dashboard(pre, depth) {
     const p = k.split('>');
     return { name: p[d - 1], path: p, trail: p.slice(pre.length, d - 1).join(' › '), ...stats(l) };
   }).sort((a, b) => b.perf - a.perf || b.total - a.total).map((x, i) => ({ ...x, rank: i + 1 }));
-  const depts = Object.keys(DEPTS).map(k => ({ dept: k, label: DEPTS[k], ...stats(list.filter(r => r.dept === k)) })).filter(x => x.total);
+  const depts = Object.keys(DEPTS).map(k => ({ dept: k, label: deptName(k), source: DEPT_CONFIG[k] ? DEPT_CONFIG[k].source : null, ...stats(list.filter(r => r.dept === k)) })).filter(x => x.total);
   const cats = Object.keys(CATS).map(k => ({ cat: k, label: CATS[k].label, ...stats(list.filter(r => r.category === k)) })).filter(x => x.total);
   const points = list.filter(r => r.lat != null).slice(0, 500).map(r => ({ id: r.id, lat: r.lat, lng: r.lng, severity: sevLabel(r), sev: r.sev || null, status: r.status, caption: r.caption }));
   return { path: pre, depth: d, summary: stats(list), ranking, depts, cats, points };
@@ -534,7 +545,7 @@ function dashboard(pre, depth) {
 const routes = [];
 const R = (m, re, fn) => routes.push([m, re, fn]);
 
-R('GET', /^\/api\/hierarchy$/, () => ({ verifyMaxM: VERIFY_MAX_M, tree, levels: LEVELS, cats: CATS, depts: DEPTS, levelNames: LEVEL_NAMES, config: { circulationKm: CIRCULATION_KM, confirmM: CONFIRM_M, flagsToRemove: FLAGS_TO_REMOVE }, ai: aiConfigured(), aiModel: process.env.GEMINI_MODEL || null }));
+R('GET', /^\/api\/hierarchy$/, () => ({ verifyMaxM: VERIFY_MAX_M, tree, levels: LEVELS, cats: CATS, depts: Object.fromEntries(Object.keys(DEPTS).map(k => [k, deptName(k)])), levelNames: LEVEL_NAMES, config: { circulationKm: CIRCULATION_KM, confirmM: CONFIRM_M, flagsToRemove: FLAGS_TO_REMOVE }, ai: aiConfigured(), aiModel: process.env.GEMINI_MODEL || null }));
 
 R('POST', /^\/api\/users$/, ({ body: b }) => {
   const role = b.role;
@@ -552,7 +563,7 @@ R('POST', /^\/api\/users$/, ({ body: b }) => {
     const lvl = +b.level;
     if (![0, 1, 2, 3].includes(lvl) || p.length !== lvl + 1) throw err(400, 'Pick your jurisdiction fully for the chosen level');
     if (b.dept !== 'all' && !DEPTS[b.dept]) throw err(400, 'Choose a department');
-    u.id = rid('AU'); u.level = lvl; u.dept = b.dept; u.office = String(b.office || '').trim().slice(0, 80) || `${LEVEL_NAMES[lvl]} ${b.dept === 'all' ? 'Administration' : DEPTS[b.dept]}`;
+    u.id = rid('AU'); u.level = lvl; u.dept = b.dept; u.office = String(b.office || '').trim().slice(0, 80) || `${LEVEL_NAMES[lvl]} ${b.dept === 'all' ? 'administration' : DEPTS[b.dept].toLowerCase()} office`;
   }
   db.users[u.id] = u; save();
   return u;

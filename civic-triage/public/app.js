@@ -86,7 +86,7 @@ function register(role) {
   $('#app').innerHTML = `<div class="card"><h2>${au ? '🏛 Register as Authority' : '🧑 Register as Citizen'}</h2>
   ${au ? `<label>Level of authority</label><select id="lvl">${H.levelNames.map((n, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${n} (${['India', 'State / UT', 'District', 'City / Block / ULB'][i]})</option>`).join('')}</select>
   <label>Department</label><select id="dept"><option value="all">All departments</option>${Object.entries(H.depts).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
-  <label>Office name (optional)</label><input id="office" placeholder="e.g. Kharagpur Municipality – Roads Wing">` : ''}
+  <label>Office name (optional)</label><input id="office" placeholder="Your office name, exactly as officially published">` : ''}
   <div id="pick"></div>
   <label>Phone (10 digits)</label><input id="phone" inputmode="numeric" maxlength="14" placeholder="9876543210">
   <label>Email</label><input id="email" type="email" placeholder="you@example.com">
@@ -199,7 +199,7 @@ function card(r) {
   ${r.media.length ? mediaHtml(r.media) : `<div class="ph">${ICON[r.category]}</div>`}
   ${r.ai ? `<div class="meta">🤖 AI (${Math.round(r.ai.confidence * 100)}% confident): ${esc(r.ai.reasoning)}</div>` : ''}
   <div class="meta">📍 ${esc(r.address || 'Pinned location')}${r.locSource ? ` · ${LOCSRC[r.locSource] || ''}` : ''}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}<br>
-  by <b>${esc(r.author)}</b>${r.mine ? ' (you)' : ''} · Routed to <b>${r.assignedName}</b> · ${esc(r.deptLabel)} · SLA ${r.slaDays}d</div>
+  by <b>${esc(r.author)}</b>${r.mine ? ' (you)' : ''} · Routed to <b>${r.assignedName}</b> · ${r.deptSource ? `<a href="${esc(r.deptSource)}" target="_blank" rel="noopener">${esc(r.deptLabel)}</a>` : esc(r.deptLabel)} · SLA ${r.slaDays}d</div>
   ${r.afterMedia.length ? `<div class="sep"></div><b>Before → After</b><div class="ba"><div>${mediaHtml(r.media.filter(m => m.type === 'image').slice(0, 1))}</div><div>${mediaHtml(r.afterMedia.slice(0, 1))}</div></div>` : ''}
   ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">🤖 <b>${{ verified: 'VERIFIED FIXED', not_fixed: 'NOT FIXED', inconclusive: 'INCONCLUSIVE' }[r.verdict.result] || esc(r.verdict.result)}</b>${r.verdict.by === 'ai' ? ` · AI confidence ${Math.round(r.verdict.confidence * 100)}%` : ` · ${esc(r.verdict.by)}`}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from spot` : ''}<br>${esc(r.verdict.reason)}</div>` : ''}
   ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="row" style="margin-top:6px"><span class="meta">Is it really fixed? 👍 ${r.resolutionVotes.ok} · 👎 ${r.resolutionVotes.bad}</span>

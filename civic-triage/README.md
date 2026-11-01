@@ -14,6 +14,7 @@ Built for Forge Gen AI Buildathon (Theme 1: Civic Pulse) by Team NeuroSync, IIT 
 - **AI fix verification:** verified only if Gemini says the issue is fixed with confidence >= 0.6 **and** the after-photo was taken within 200 m. If the AI is unavailable or unsure the closure is recorded as **claimed (unverified)**, never as fixed. Citizens can confirm or dispute; 3 disputes reopen the issue.
 - **Public accountability dashboard:** Leaflet map with severity pins, claimed vs AI-verified closure rate per department, AI-rejected closure claims, rankings by state / district / city / locality.
 - Anonymous discussion, upvotes with on-site confirmation, abuse flagging with strikes.
+- Accounts: citizens see and remove their own reports, edit their area or delete the account; authorities edit their level, department and jurisdiction. New reports create a notice for the matching authority.
 
 ## Agent pipeline
 | Step | What it does | Tool |
@@ -23,7 +24,7 @@ Built for Forge Gen AI Buildathon (Theme 1: Civic Pulse) by Team NeuroSync, IIT 
 | critic | Re-prompts once on invalid JSON, category mismatch or confidence < 0.6; still unsure → human review queue | Gemini vision |
 | geolocate | Reverse-geocodes the coordinates (1 req/s, cached, labelled fallback) | OSM Nominatim |
 | dedupe | Finds an open report of the same category within 150 m | haversine distance |
-| route | SLA from category, shortened for severity 4–5; department key from category; jurisdiction from the citizen's area; reasoning cited | rules |
+| route | SLA from category, shortened for severity 4–5; department key from category; sent to the authority level the citizen chose (local, district, state, national) for the area where the issue is (reverse-geocoded), escalating when the SLA lapses; reasoning cited | rules |
 | publish | Saves the report and photos | Supabase |
 
 Gemini calls use a JSON response schema and temperature 0. On HTTP 429/5xx or timeout the call retries with the backup key, then the fallback model.

@@ -282,14 +282,15 @@ async function feed() {
    ${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>
   <div class="filters">
    ${cit ? `<button class="sel ${useGps ? 'on' : ''}" onclick="toggleGps()">${ic('gps')} ${useGps ? 'Near me' : 'Use location'}</button>${useGps ? `<select id="f-rad" class="sel">${opt([1, 2, 5, 10, 25].map(r => [r, r + ' km']), filters.radius)}</select>` : ''}`
-      : `<select id="f-scope" class="sel"><option value="mine">Assigned to my level</option><option value="all">All in jurisdiction</option><option value="removed">Removed posts</option></select>`}
+      : `<select id="f-scope" class="sel">${opt([['all', 'All in my jurisdiction'], ['mine', 'Responsible at my level'], ['removed', 'Removed posts']], filters.scope || 'all')}</select>`}
    <select id="f-st" class="sel">${opt([['open', 'Unresolved'], ['', 'All statuses'], ['claimed', 'Claimed fixed'], ['resolved', 'Verified fixed'], ['in_progress', 'In progress']], filters.status)}</select>
    <select id="f-sort" class="sel">${opt([['priority', 'Priority'], ['votes', 'Most upvoted'], ['new', 'Newest'], ['old', 'Oldest']], filters.sort)}</select>
-   <select id="f-cat" class="sel"><option value="">All categories</option>${catsSorted().map(([k, c]) => `<option value="${k}" ${filters.cat === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>
+   ${cit ? `<select id="f-cat" class="sel"><option value="">All categories</option>${catsSorted().map(([k, c]) => `<option value="${k}" ${filters.cat === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select>`
+      : `<select id="f-dept" class="sel"><option value="all">All departments</option>${deptsSorted().map(([k, v]) => `<option value="${k}" ${(filters.dept ?? ME.dept) === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`}
    <label class="search">${ic('search')}<input id="f-q" placeholder="Search" value="${esc(filters.q)}"></label></div>
   <div class="feed-grid"><div id="list"><div class="skel"></div><div class="skel"></div></div>
    <aside class="side"><div class="card mapcard"><div id="fmap" class="map"></div>${legendHtml()}</div></aside></div>`;
-  ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || filters.radius; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = $('#f-cat').value; loadList(); }; });
+  ['f-rad', 'f-sort', 'f-st', 'f-cat', 'f-scope', 'f-dept'].forEach(id => { const e = $('#' + id); if (e) e.onchange = () => { filters.radius = +($('#f-rad') || {}).value || filters.radius; filters.sort = $('#f-sort').value; filters.status = $('#f-st').value; filters.cat = ($('#f-cat') || {}).value || ''; if ($('#f-scope')) filters.scope = $('#f-scope').value; if ($('#f-dept')) filters.dept = $('#f-dept').value; loadList(); }; });
   $('#f-q').oninput = e => { filters.q = e.target.value; clearTimeout(feed.t); feed.t = setTimeout(loadList, 300); };
   loadList();
   if (cit && !feed.asked) { feed.asked = true; curPos().then(p => { if (p && !useGps && page === 'feed') { useGps = true; feed(); } }); }
@@ -303,11 +304,11 @@ async function loadList(silent) {
   const cit = ME.role === 'citizen';
   const p = new URLSearchParams({ user: ME.id, sort: filters.sort, status: filters.status, cat: filters.cat, q: filters.q, radius: filters.radius });
   if (cit && useGps && GPS) { p.set('lat', GPS.lat); p.set('lng', GPS.lng); }
-  if (!cit) { const sc = ($('#f-scope') || {}).value || 'mine'; p.set('scope', sc === 'mine' ? 'mine' : 'all'); if (sc === 'removed') p.set('removed', '1'); }
+  if (!cit) { const sc = ($('#f-scope') || {}).value || 'all'; p.set('scope', sc === 'mine' ? 'mine' : 'all'); if (sc === 'removed') p.set('removed', '1'); p.set('dept', ($('#f-dept') || {}).value || ME.dept || 'all'); p.set('cat', ''); }
   try {
     const l = await api('GET', '/api/reports?' + p);
     showPins('fmap', l, cit && useGps && GPS ? GPS : null);
-    $('#list').innerHTML = (l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : `Reports appear here when citizens send them to the ${H.levelNames[ME.level]} level in ${esc(ME.path.slice(-1)[0])}${ME.dept === 'all' ? '' : ' for ' + esc(H.depts[ME.dept])}. Try "All in jurisdiction".`}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`);
+    $('#list').innerHTML = (l.length ? l.map(card).join('') : `<div class="empty">${ic('inbox')}<b>No reports yet</b><span>${cit ? 'Nothing matches these filters.' : `Every report from ${esc(ME.path.slice(-1)[0])} appears here. Try "All departments" if you are filtering by one.`}</span>${cit ? `<button class="btn pri" onclick="nav('report')">${ic('plus')} New report</button>` : ''}</div>`);
     if (!silent) animIn('#list > *', { stagger: .06 });
   } catch (e) { $('#list').innerHTML = `<div class="note bad">${esc(e.message)}</div>`; if (/Unknown profile/.test(e.message)) signout(); }
 }
@@ -328,7 +329,7 @@ function card(r) {
    <h3>${esc(r.caption)}</h3>
    ${r.description ? `<p class="desc">${esc(r.description)}</p>` : ''}
    ${r.ai ? `<p class="ai">${esc(r.ai.reasoning)}</p>` : ''}
-   <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km` : ''}</span><span>${ic('landmark')}${r.assignedName} authority, ${esc((r.areaPath || []).slice(-2).join(', '))} · ${dept} · SLA ${r.slaDays}d</span></div>
+   <div class="metas"><span>${ic('pin')}${esc(r.address || 'Pinned location')}${r.distanceKm != null ? ` · ${r.distanceKm} km` : ''}</span><span>${ic('landmark')}${esc((r.areaPath || []).slice(-2).join(', '))} · ${dept} · Responsible: ${r.assignedName} · SLA ${r.slaDays}d</span></div>
    ${r.afterMedia.length ? `<div class="ba"><figure>${img ? `<img src="${img.url}" alt="">` : ''}<figcaption>Before</figcaption></figure><figure><img src="${r.afterMedia[0].url}" alt=""><figcaption>After</figcaption></figure></div>` : ''}
    ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">${ic(VICON[r.verdict.result] || 'alert')}<div><b>${VLABEL[r.verdict.result] || esc(r.verdict.result)}</b><span class="vmeta">${r.verdict.by === 'ai' ? `Confidence ${Math.round(r.verdict.confidence * 100)}%` : r.verdict.by === 'integrity' ? 'Integrity check' : 'Not checked by AI'}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from the reported spot` : ''}</span><span>${esc(r.verdict.reason)}</span></div></div>` : ''}
    ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="confirm"><span>Is it fixed? ${r.resolutionVotes.ok} yes · ${r.resolutionVotes.bad} no</span><button class="btn sm ${r.myResVote === true ? 'on' : ''}" onclick="resVote('${r.id}',true)">Yes</button><button class="btn sm ${r.myResVote === false ? 'on' : ''}" onclick="resVote('${r.id}',false)">No</button></div>` : ''}

@@ -466,7 +466,7 @@ async function runTriage(inp) {
     ? `No AI severity (human review needed). Default SLA ${base} days for ${CATS[category].label.toLowerCase()}. Department key "${deptKey}" from category.`
     : `Severity ${sev}/5 (${sevName(sev)}) from vision model, confidence ${Math.round(p.confidence * 100)}%: ${short(p.reasoning, 200)} SLA: base ${base} days for ${CATS[category].label.toLowerCase()}${slaDays !== base ? `, shortened to ${slaDays} days because severity is ${sev}` : ''}. Department key "${deptKey}" from category; sent to the ${LEVEL_NAMES[inp.levelIdx != null ? inp.levelIdx : 3]} authority chosen by the citizen, for the area where the issue is.`;
   step('route', needsReview ? 'warn' : 'ok', routeWhy, { source: 'routing rules' });
-  inp.locPath = pathForLocation(geo, inp.lat, inp.lng);
+  inp.locPath = pathForLocation(geo, inp.lat, inp.lng); // also works when the address lookup failed
 
   return {
     caption: inp.caption, description: inp.description, category, sev, slaDays, deptKey, needsReview, reviewWhy, privacyFlag, geo, dup, trace,
@@ -477,19 +477,28 @@ async function runTriage(inp) {
 // ---------- report location -> administrative area ----------
 // Routes by where the issue IS (reverse-geocoded), not by the reporter's home area. Falls back to the reporter's area.
 const norm = s => String(s || '').toLowerCase().replace(/\b(district|state of|union territory of|municipality|city)\b/g, '').replace(/[^a-z]/g, '');
+// Names from the address lookup are matched first; when a name is missing or spelled differently, the nearest
+// listed place (by coordinates) is used, so a report always reaches the local level when one exists nearby.
+function nearest(nodes, lat, lng, maxKm) { let best = null, bd = maxKm; for (const n of nodes || []) { const d = km([lat, lng], n.g); if (d != null && d < bd) { bd = d; best = n; } } return best; }
 function pathForLocation(geo, lat, lng) {
-  if (!geo) return null;
-  const st = tree.c.find(x => norm(x.n) === norm(geo.state)); if (!st) return null;
+  const allDistricts = () => tree.c.flatMap(st => st.c.map(d => ({ st, d })));
+  let st = geo ? tree.c.find(x => norm(x.n) === norm(geo.state)) : null;
+  let dist = st && geo ? (st.c.find(x => norm(x.n) === norm(geo.district)) || st.c.find(x => x.c.some(c => norm(c.n) === norm(geo.city)))) : null;
+  if (!dist) { // no name match: nearest district (inside the matched state if known), within 80 km
+    const cands = st ? st.c.map(d => ({ st, d })) : allDistricts();
+    let best = null, bd = 80;
+    for (const x of cands) for (const c of [x.d, ...x.d.c]) { const dd = km([lat, lng], c.g); if (dd != null && dd < bd) { bd = dd; best = x; } }
+    if (best) { st = best.st; dist = best.d; }
+  }
+  if (!st) return null;
   const path = ['India', st.n];
-  const dist = st.c.find(x => norm(x.n) === norm(geo.district)) || st.c.find(x => x.c.some(c => norm(c.n) === norm(geo.city)));
   if (!dist) return path;
   path.push(dist.n);
-  const city = dist.c.find(x => norm(x.n) === norm(geo.city)) || (dist.c.length === 1 ? dist.c[0] : null);
+  const city = (geo && dist.c.find(x => norm(x.n) === norm(geo.city))) || nearest(dist.c, lat, lng, 40) || (dist.c.length === 1 ? dist.c[0] : null);
   if (!city) return path;
   path.push(city.n);
-  let best = null, bd = 4; // nearest listed locality within 4 km
-  for (const l of city.c || []) { const d = km([lat, lng], l.g); if (d != null && d < bd) { bd = d; best = l; } }
-  if (best) path.push(best.n);
+  const loc = nearest(city.c, lat, lng, 4);
+  if (loc) path.push(loc.n);
   return path;
 }
 const LEVEL_KEYS = { national: 0, state: 1, district: 2, local: 3 };
@@ -697,7 +706,8 @@ R('GET', /^\/api\/reports$/, ({ q }) => {
     list = list.filter(r => !r.removed || r.user === u.id);
     list = list.filter(r => { const d = km(here, r.lat != null ? [r.lat, r.lng] : null); return d != null ? d <= radius : isPrefix(u.path.slice(0, 4), r.path); });
   } else {
-    list = list.filter(r => isPrefix(u.path, r.path) && (u.dept === 'all' || r.dept === u.dept));
+    list = list.filter(r => isPrefix(u.path, r.path));
+    if (q.dept && q.dept !== 'all') list = list.filter(r => r.dept === q.dept);
     if (q.removed === '1') list = list.filter(r => r.removed); else list = list.filter(r => !r.removed);
     if (q.scope === 'mine') list = list.filter(r => assigned(r) === u.level && r.status !== 'resolved');
   }
@@ -772,7 +782,7 @@ async function createReport(b, trace) {
   r.score = score(r);
   db.reports[r.id] = r;
   const lv = assigned(r);
-  notify(r.path.slice(0, lv + 1), 'new_report', `New ${sevName(r.sev).toLowerCase()} report: "${r.caption}" (${CATS[r.category].label}) at ${r.address || 'a pinned location'}.`, { reportId: r.id, dept: r.dept, level: lv });
+  notify(r.path.slice(), 'new_report', `New ${sevName(r.sev).toLowerCase()} report: "${r.caption}" (${CATS[r.category].label}) at ${r.address || 'a pinned location'}.`, { reportId: r.id, dept: r.dept, level: lv });
   save();
   return { merged: false, report: view(r, u.id), trace: t.trace };
 }
@@ -878,7 +888,7 @@ R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
 
 R('GET', /^\/api\/notices$/, ({ q }) => {
   const u = needUser(q.user, 'authority');
-  return db.notices.filter(n => isPrefix(u.path, n.path) && (n.kind !== 'new_report' || (n.level === u.level && (u.dept === 'all' || n.dept === u.dept)))).sort((a, b) => b.t - a.t).slice(0, 100);
+  return db.notices.filter(n => isPrefix(u.path, n.path) && (n.kind !== 'new_report' || u.dept === 'all' || n.dept === u.dept)).sort((a, b) => b.t - a.t).slice(0, 100);
 });
 R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
   const u = needUser(b.user, 'authority');

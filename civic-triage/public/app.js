@@ -64,32 +64,27 @@ function closeModal() { $('#modal').hidden = true; }
 // ---------- location picker (hierarchy) ----------
 function nodeAt(p) { let n = H.tree; for (let i = 1; i < p.length; i++) { n = (n.c || []).find(x => x.n === p[i]); if (!n) return null; } return n; }
 function mountPicker(el, o) {
-  const st = { path: (o.initial || ['India']).slice(), custom: -1 };
+  // Only places from the official list can be chosen (no free text); options are alphabetical.
+  const st = { path: (o.initial || ['India']).slice() };
   const done = () => st.path.length >= o.min && st.path.every(Boolean);
   function draw() {
     el.innerHTML = '';
     for (let i = 1; i < o.max; i++) {
-      const parent = st.custom >= 0 && i > st.custom ? null : nodeAt(st.path.slice(0, i));
-      if (st.custom >= 0 && i === st.custom) {
-        el.insertAdjacentHTML('beforeend', `<label>${H.levels[i]} (type your own)</label><input data-c="${i}" value="${esc(st.path[i] || '')}" placeholder="Enter name">`);
-        break;
-      }
-      if (!parent || (st.path.length < i)) break;
-      const kids = parent.c || [];
-      if (!kids.length && i >= o.min) break;
+      const parent = nodeAt(st.path.slice(0, i));
+      if (!parent || st.path.length < i) break;
+      const kids = (parent.c || []).slice().sort((a, b) => a.n.localeCompare(b.n, 'en'));
+      if (!kids.length) break;
       const cur = st.path[i] || '';
-      el.insertAdjacentHTML('beforeend', `<label>${H.levels[i]}</label><select data-i="${i}">
-        <option value="">${i >= o.min ? '— stop here —' : '— choose —'}</option>
-        ${kids.map(k => `<option ${k.n === cur ? 'selected' : ''}>${esc(k.n)}</option>`).join('')}
-        <option value="__c">✏️ Not listed – type my own</option></select>`);
+      el.insertAdjacentHTML('beforeend', `<div class="field"><label>${H.levels[i]}</label><select data-i="${i}">
+        <option value="">${i >= o.min ? 'All' : 'Select'}</option>
+        ${kids.map(k => `<option ${k.n === cur ? 'selected' : ''}>${esc(k.n)}</option>`).join('')}</select></div>`);
       if (!cur) break;
     }
     el.querySelectorAll('select').forEach(s => s.onchange = () => {
-      const i = +s.dataset.i; st.path.length = i; st.custom = -1;
-      if (s.value === '__c') { st.custom = i; st.path[i] = ''; } else if (s.value) st.path[i] = s.value;
+      const i = +s.dataset.i; st.path.length = i;
+      if (s.value) st.path[i] = s.value;
       draw(); o.onChange(st.path.slice(), done());
     });
-    el.querySelectorAll('input[data-c]').forEach(inp => inp.oninput = () => { st.path.length = st.custom; if (inp.value.trim()) st.path[st.custom] = inp.value.trim(); o.onChange(st.path.slice(), done()); });
     o.onChange(st.path.slice(), done());
   }
   draw();

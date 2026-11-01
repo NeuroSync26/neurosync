@@ -1,6 +1,7 @@
 'use strict';
 const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-const { tree, LEVELS } = require('./hierarchy');
+const { tree, LEVELS, findNode } = require('./hierarchy');
+(function sortTree(n) { if (n.c) { n.c.sort((a, b) => a.n.localeCompare(b.n, 'en')); n.c.forEach(sortTree); } })(tree); // every list alphabetical
 
 // Minimal .env loader for local runs (no dependencies). Real env vars always win.
 try {
@@ -89,16 +90,19 @@ function parseMedia(list) {
   }
   return out;
 }
-// ---------- storage: Supabase (Postgres table app_docs + Storage bucket) or local files for dev ----------
+// ---------- storage: Supabase (Postgres tables + Storage bucket) or local files for dev ----------
 // Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_BUCKET (default report-photos).
-// Each user / report / notice is one row in app_docs(id text pk, kind text, data jsonb, updated_at timestamptz).
+// Tables (see supabase.sql): citizens, authorities, reports, notices. The server writes id + data (jsonb);
+// readable columns (status, severity, city, ...) are generated from data by Postgres.
 const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, ''), SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SB_BUCKET = process.env.SUPABASE_BUCKET || 'report-photos';
 const useSupabase = !!(SB_URL && SB_KEY);
+const TABLES = ['citizens', 'authorities', 'reports', 'notices'];
 const sbHeaders = (extra = {}) => ({ apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, ...extra });
 const hashOf = d => crypto.createHash('sha1').update(JSON.stringify(d)).digest('hex');
 const lastHash = new Map();
 let db = { users: {}, reports: {}, notices: [] };
+let storageStatus = useSupabase ? 'connecting' : 'local';
 
 async function loadDb() {
   if (!useSupabase) {
@@ -108,21 +112,28 @@ async function loadDb() {
   }
   for (let attempt = 1; attempt <= 6; attempt++) {
     try {
-      const rows = [];
-      for (let from = 0; ; from += 1000) {
-        const res = await fetch(`${SB_URL}/rest/v1/app_docs?select=id,kind,data&order=id`, { headers: sbHeaders({ Range: `${from}-${from + 999}`, 'Range-Unit': 'items' }), signal: AbortSignal.timeout(20000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-        const page = await res.json(); rows.push(...page);
-        if (page.length < 1000) break;
-      }
-      for (const r of rows) {
-        if (r.kind === 'user') db.users[r.data.id] = r.data;
-        else if (r.kind === 'report') db.reports[r.data.id] = r.data;
-        else if (r.kind === 'notice') db.notices.push(r.data);
-        lastHash.set(r.id, hashOf(r.data));
+      let count = 0;
+      for (const table of TABLES) {
+        for (let from = 0; ; from += 1000) {
+          const res = await fetch(`${SB_URL}/rest/v1/${table}?select=id,data&order=id`, { headers: sbHeaders({ Range: `${from}-${from + 999}`, 'Range-Unit': 'items' }), signal: AbortSignal.timeout(20000) });
+          if (!res.ok) {
+            const body = (await res.text()).slice(0, 200);
+            if (res.status === 404 || /PGRST205|does not exist|schema cache/i.test(body)) throw new Error(`table "${table}" not found. Run civic-triage/supabase.sql in the Supabase SQL editor first.`);
+            throw new Error(`HTTP ${res.status} ${body}`);
+          }
+          const page = await res.json();
+          for (const r of page) {
+            if (table === 'reports') db.reports[r.id] = r.data;
+            else if (table === 'notices') db.notices.push(r.data);
+            else db.users[r.id] = r.data;
+            lastHash.set(table + ':' + r.id, hashOf(r.data)); count++;
+          }
+          if (page.length < 1000) break;
+        }
       }
       db.notices.sort((a, b) => a.t - b.t);
-      console.log(`Storage: Supabase (${rows.length} records loaded)`);
+      storageStatus = 'supabase';
+      console.log(`Storage: Supabase (${count} records loaded from ${TABLES.join(', ')})`);
       return;
     } catch (e) {
       console.error(`Supabase load failed (attempt ${attempt}/6): ${e.message}`);
@@ -135,26 +146,30 @@ async function loadDb() {
 
 let saveT = null, saving = false, saveAgain = false;
 function save() { clearTimeout(saveT); saveT = setTimeout(flush, 250); }
+const iso = ms => new Date(ms || Date.now()).toISOString();
 async function flush() {
   if (!useSupabase) { fs.writeFile(DBF + '.tmp', JSON.stringify(db), () => fs.rename(DBF + '.tmp', DBF, () => { })); return; }
   if (saving) { saveAgain = true; return; }
   saving = true;
   try {
-    const rows = [];
-    const add = (kind, d) => { const id = kind + ':' + d.id, h = hashOf(d); if (lastHash.get(id) !== h) rows.push({ id, kind, data: d, h }); };
-    for (const u of Object.values(db.users)) add('user', u);
-    for (const r of Object.values(db.reports)) add('report', r);
-    for (const n of db.notices) add('notice', n);
-    for (let i = 0; i < rows.length; i += 50) {
-      const chunk = rows.slice(i, i + 50), ts = new Date().toISOString();
-      const res = await fetch(`${SB_URL}/rest/v1/app_docs`, {
-        method: 'POST', headers: sbHeaders({ 'content-type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify(chunk.map(r => ({ id: r.id, kind: r.kind, data: r.data, updated_at: ts }))), signal: AbortSignal.timeout(20000)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-      for (const r of chunk) lastHash.set(r.id, r.h);
+    const byTable = {};
+    const add = (table, d, created) => { const key = table + ':' + d.id, h = hashOf(d); if (lastHash.get(key) !== h) (byTable[table] ||= []).push({ key, h, row: { id: d.id, data: d, created_at: iso(created), updated_at: iso() } }); };
+    for (const u of Object.values(db.users)) add(u.role === 'authority' ? 'authorities' : 'citizens', u, u.createdAt);
+    for (const r of Object.values(db.reports)) add('reports', r, r.createdAt);
+    for (const n of db.notices) add('notices', n, n.t);
+    for (const [table, rows] of Object.entries(byTable)) {
+      for (let i = 0; i < rows.length; i += 50) {
+        const chunk = rows.slice(i, i + 50);
+        const res = await fetch(`${SB_URL}/rest/v1/${table}?on_conflict=id`, {
+          method: 'POST', headers: sbHeaders({ 'content-type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
+          body: JSON.stringify(chunk.map(r => r.row)), signal: AbortSignal.timeout(20000)
+        });
+        if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+        for (const r of chunk) lastHash.set(r.key, r.h);
+      }
     }
-  } catch (e) { console.error('Supabase save failed, retrying in 5 s:', e.message); setTimeout(save, 5000); }
+    storageStatus = 'supabase';
+  } catch (e) { storageStatus = 'save-error'; console.error('Supabase save failed, retrying in 5 s:', e.message); setTimeout(save, 5000); }
   finally { saving = false; if (saveAgain) { saveAgain = false; save(); } }
 }
 async function storeMedia(list) {
@@ -203,7 +218,7 @@ async function geminiJSON({ system, parts, schema, timeoutMs = 45000 }) {
           body: JSON.stringify({
             systemInstruction: system ? { parts: [{ text: system }] } : undefined,
             contents: [{ role: 'user', parts }],
-            generationConfig: { temperature, responseMimeType: 'application/json', responseSchema: schema }
+            generationConfig: { temperature, responseMimeType: 'application/json', responseSchema: schema, ...(process.env.GEMINI_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: process.env.GEMINI_THINKING_LEVEL } } : {}) }
           }),
           signal: AbortSignal.timeout(timeoutMs)
         });
@@ -322,7 +337,7 @@ function validPerception(j) {
 const short = (s, n = 160) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 
 async function runTriage(inp) {
-  const trace = [];
+  const trace = inp.trace || [];
   const step = (name, status, output, extra = {}) => { const e = { step: name, status, output, ...extra }; trace.push(e); return e; };
   const imgs = await imgParts(inp.media, 2);
 
@@ -551,7 +566,7 @@ R('POST', /^\/api\/users$/, ({ body: b }) => {
   const role = b.role;
   if (!['citizen', 'authority'].includes(role)) throw err(400, 'Choose a role');
   const p = (Array.isArray(b.path) ? b.path : []).map(x => String(x).trim().slice(0, 60)).filter(Boolean);
-  if (p[0] !== 'India') throw err(400, 'Invalid location');
+  if (p[0] !== 'India' || !findNode(p)) throw err(400, 'Choose your location from the list.');
   const phone = String(b.phone || '').replace(/\D/g, '').slice(-10), email = String(b.email || '').trim().slice(0, 80);
   if (phone.length !== 10) throw err(400, 'Enter a valid 10-digit phone number');
   if (!/^\S+@\S+\.\S+$/.test(email)) throw err(400, 'Enter a valid email');
@@ -609,7 +624,7 @@ R('GET', /^\/api\/geocode$/, async ({ q }) => {
   } catch (e) { throw err(502, 'Address search is unavailable right now. Drop a pin on the map instead.'); }
 });
 
-R('POST', /^\/api\/reports$/, async ({ body: b }) => {
+async function createReport(b, trace) {
   const u = needUser(b.user, 'citizen'); notSuspended(u);
   const userCat = CATS[b.category] ? b.category : '';
   const caption = String(b.caption || '').trim().slice(0, 140);
@@ -622,7 +637,7 @@ R('POST', /^\/api\/reports$/, async ({ body: b }) => {
   const media = parseMedia(b.media);
   if (!media.some(m => m.type === 'image')) throw err(400, 'Add at least one photo: the AI agent needs a photo to assess the issue.');
 
-  const t = await runTriage({ caption, description, address, userCat, media, lat, lng, locSource, path: u.path });
+  const t = await runTriage({ caption, description, address, userCat, media, lat, lng, locSource, path: u.path, trace });
   if (t.rejected) throw Object.assign(err(422, 'Report rejected by the guardrail: ' + t.reason), { data: { trace: t.trace } });
   const t0 = now();
   await storeMedia(media);
@@ -657,7 +672,30 @@ R('POST', /^\/api\/reports$/, async ({ body: b }) => {
   r.score = score(r);
   db.reports[r.id] = r; save();
   return { merged: false, report: view(r, u.id), trace: t.trace };
+}
+
+// Live progress: the browser sends a clientId and polls /api/progress/:id, so every agent step shows as it
+// happens and the result is still delivered if the submit request itself is cut off (slow mobile network).
+const PROG = new Map();
+R('GET', /^\/api\/progress\/([\w-]{8,64})$/, ({ m }) => {
+  const p = PROG.get(m[1]); if (!p) throw err(404, 'Unknown submission');
+  return { done: p.done, trace: p.trace, result: p.result || null, error: p.error || null };
 });
+R('POST', /^\/api\/reports$/, async ({ body: b }) => {
+  const cid = /^[\w-]{8,64}$/.test(b.clientId || '') ? b.clientId : null;
+  if (cid && PROG.has(cid)) { // retry of the same submission: never create a duplicate
+    const p = PROG.get(cid);
+    if (!p.done) throw err(409, 'This report is still being processed.');
+    if (p.error) throw Object.assign(err(p.error.code, p.error.message), { data: { trace: p.trace } });
+    return p.result;
+  }
+  const prog = { trace: [], done: false, t: now() };
+  if (cid) { for (const [k, v] of PROG) if (now() - v.t > 15 * 60e3) PROG.delete(k); PROG.set(cid, prog); }
+  try { prog.result = await createReport(b, prog.trace); return prog.result; }
+  catch (e) { prog.error = { code: e.code || 500, message: e.message }; throw e; }
+  finally { prog.done = true; }
+});
+
 R('POST', /^\/api\/reports\/([\w-]+)\/upvote$/, ({ m, body: b }) => {
   const u = needUser(b.user, 'citizen'); notSuspended(u);
   const r = db.reports[m[1]]; if (!r) throw err(404, 'Not found');
@@ -743,7 +781,7 @@ R('POST', /^\/api\/notices\/([\w-]+)\/resolve$/, ({ m, body: b }) => {
   }
   save(); return n;
 });
-R('GET', /^\/api\/health$/, () => ({ ok: true, storage: useSupabase ? 'supabase' : 'local', ai: aiConfigured(), reports: Object.keys(db.reports).length, time: new Date().toISOString() }));
+R('GET', /^\/api\/health$/, () => ({ ok: storageStatus !== 'save-error', storage: storageStatus, ai: aiConfigured(), reports: Object.keys(db.reports).length, time: new Date().toISOString() }));
 R('GET', /^\/api\/dashboard$/, ({ q }) => dashboard(q.path ? q.path.split('|').filter(Boolean) : ['India'], +q.depth || 0));
 
 

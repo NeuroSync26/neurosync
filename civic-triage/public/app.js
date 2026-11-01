@@ -10,7 +10,7 @@ const api = async (m, u, b) => {
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('show'), 3500); }
 const ago = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.floor(m / 60) + 'h ago' : Math.floor(m / 1440) + 'd ago'; };
 const ICON = { pothole: '🕳️', bridge: '🌉', water_leak: '💧', sewage: '🚰', pollution: '🏭', garbage: '🗑️', streetlight: '💡', electric_hazard: '⚡', other: '📍' };
-const STAT = { open: 'Open', acknowledged: 'Acknowledged', in_progress: 'In progress', resolved: 'Resolved', reopened: 'Reopened' };
+const STAT = { open: 'Open', acknowledged: 'Acknowledged', in_progress: 'In progress', resolved: 'AI-verified fixed', claimed: 'Claimed fixed (unverified)', reopened: 'Reopened' };
 
 let H, ME, page, GPS = null, useGps = false, filters = { radius: 5, sort: 'priority', status: 'open', cat: '', q: '' };
 
@@ -161,8 +161,8 @@ function card(r) {
   <div class="meta">📍 ${esc(r.address)} · ${esc(r.path.slice(2).join(' › '))}${r.distanceKm != null ? ` · ${r.distanceKm} km away` : ''}<br>
   by <b>${esc(r.author)}</b>${r.mine ? ' (you)' : ''} · Routed to <b>${r.assignedName}</b> · ${esc(r.deptLabel)} · SLA ${r.slaDays}d</div>
   ${r.afterMedia.length ? `<div class="sep"></div><b>Before → After</b><div class="ba"><div>${mediaHtml(r.media.filter(m => m.type === 'image').slice(0, 1))}</div><div>${mediaHtml(r.afterMedia.slice(0, 1))}</div></div>` : ''}
-  ${r.verdict ? `<div class="meta">🤖 Verification (${esc(r.verdict.by)}): ${esc(r.verdict.reason)}</div>` : ''}
-  ${r.status === 'resolved' && cit ? `<div class="row" style="margin-top:6px"><span class="meta">Is it really fixed? 👍 ${r.resolutionVotes.ok} · 👎 ${r.resolutionVotes.bad}</span>
+  ${r.verdict ? `<div class="verdict v-${esc(r.verdict.result)}">🤖 <b>${{ verified: 'VERIFIED FIXED', not_fixed: 'NOT FIXED', inconclusive: 'INCONCLUSIVE' }[r.verdict.result] || esc(r.verdict.result)}</b>${r.verdict.by === 'ai' ? ` · AI confidence ${Math.round(r.verdict.confidence * 100)}%` : ` · ${esc(r.verdict.by)}`}${r.verdict.distanceM != null ? ` · ${r.verdict.distanceM} m from spot` : ''}<br>${esc(r.verdict.reason)}</div>` : ''}
+  ${(r.status === 'resolved' || r.status === 'claimed') && cit ? `<div class="row" style="margin-top:6px"><span class="meta">Is it really fixed? 👍 ${r.resolutionVotes.ok} · 👎 ${r.resolutionVotes.bad}</span>
     <button class="btn ${r.myResVote === true ? 'on' : ''}" onclick="resVote('${r.id}',true)">✔ Yes fixed</button><button class="btn ${r.myResVote === false ? 'on' : ''}" onclick="resVote('${r.id}',false)">✖ Not fixed</button></div>` : ''}
   <div class="sep"></div>
   <div class="row">
@@ -269,7 +269,7 @@ async function doResolve(id) {
   const p = await getGps();
   try {
     const r = await api('POST', `/api/reports/${id}/status`, { user: ME.id, action: 'resolve', note: $('#rnote').value, media: pending, lat: p && p.lat, lng: p && p.lng });
-    closeModal(); toast(r.status === 'resolved' ? '✅ Verified and closed' : '❌ ' + (r.verdict ? r.verdict.reason : 'Rejected')); loadList();
+    closeModal(); const v = r.verdict || {}; toast(v.result === 'verified' ? '✅ AI-verified and closed' : v.result === 'not_fixed' ? '❌ Not fixed: ' + v.reason : '⚠️ Inconclusive: recorded as claimed, not verified'); loadList();
   } catch (e) { toast(e.message); $('#rgo').disabled = false; $('#rgo').textContent = 'Submit for verification'; }
 }
 
@@ -306,7 +306,7 @@ async function dashboardPage() {
   dashboardPage.init = false;
   if (!dpath) dpath = ME.role === 'authority' ? ME.path.slice() : ME.path.slice(0, 3);
   $('#app').innerHTML = `<div class="card"><h2>📊 ${ME.role === 'authority' ? 'Performance dashboard' : 'Public accountability dashboard'}</h2>
-  <p class="meta">Choose any level to see how authorities are performing there. Performance = 50% resolution rate + 30% share of issues within SLA + 20% speed.</p>
+  <p class="meta">Choose any level to see how authorities are performing there. <b>Claimed</b> = the department said it is fixed. <b>AI-verified</b> = the AI compared before/after photos and confirmed the fix at the same spot. Performance = 50% verified-fix rate + 30% share of issues within SLA + 20% speed.</p>
   <div id="dpick"></div><label>Rank by level</label><select id="ddepth" style="max-width:260px"></select></div><div id="dbody">Loading…</div>`;
   mountPicker($('#dpick'), { min: 1, max: 5, initial: dpath, onChange: (p) => { const changed = p.join() !== dpath.join(); dpath = p; if (changed || !dashboardPage.init) { dashboardPage.init = true; fillDepth(); loadDash(); } } });
   $('#ddepth').onchange = e => { ddepth = +e.target.value; loadDash(); };
@@ -322,13 +322,13 @@ async function loadDash() {
   const d = await api('GET', `/api/dashboard?path=${encodeURIComponent(dpath.join('|'))}&depth=${ddepth || ''}`);
   const s = d.summary, mine = ME.path.join('>');
   $('#dbody').innerHTML = `<div class="tiles">
-  <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b style="color:var(--ok)">${s.resolved}</b><span>Resolved</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div>
+  <div class="tile"><b>${s.total}</b><span>Total issues</span></div><div class="tile"><b style="color:var(--ok)">${s.resolved}</b><span>AI-verified fixed</span></div><div class="tile"><b>${s.pending}</b><span>Work left</span></div>
   <div class="tile"><b>${s.inProgress}</b><span>In progress</span></div><div class="tile"><b style="color:var(--bad)">${s.overdue}</b><span>Past SLA</span></div><div class="tile"><b>${s.critical}</b><span>Critical open</span></div>
-  <div class="tile"><b>${s.rate}%</b><span>Resolution rate</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
+  <div class="tile"><b>${s.claimedRate}%</b><span>Claimed closure rate</span></div><div class="tile"><b style="color:var(--ok)">${s.verifiedRate}%</b><span>AI-verified closure rate</span></div><div class="tile"><b style="color:var(--bad)">${s.rejected}</b><span>Closure claims rejected by AI</span></div><div class="tile"><b>${s.avgDays ?? '–'}</b><span>Avg days to fix</span></div><div class="tile"><b>${s.perf ?? '–'}</b><span>Performance /100</span></div></div>
   <div class="card"><h3>🏆 Ranking – ${['', 'States / UTs', 'Districts', 'Cities / Blocks', 'Localities'][d.depth - 1]} under ${esc(d.path.join(' › '))}</h3>
   ${d.ranking.length ? `<table><tr><th>#</th><th>Area</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th><th>Avg days</th></tr>${d.ranking.map(x => `<tr class="${mine.startsWith(x.path.join('>')) ? 'me' : ''}"><td>${x.rank}</td><td><b>${esc(x.name)}</b>${x.trail ? `<div class="meta">${esc(x.trail)}</div>` : ''}${mine.startsWith(x.path.join('>')) ? ' <span class="chip">your area</span>' : ''}</td>
   <td style="min-width:90px"><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td><td>${x.avgDays ?? '–'}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
-  <div class="card"><h3>🏢 Department-wise</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Perf</th><th>Done</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td><b>${x.perf}</b><div class="bar"><i style="width:${x.perf}%"></i></div></td><td>${x.resolved}/${x.total}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
+  <div class="card"><h3>🏢 Department-wise: claimed vs AI-verified closures</h3>${d.depts.length ? `<table><tr><th>Department</th><th>Claimed fixed</th><th>AI-verified</th><th>Gap</th><th>Rejected by AI</th><th>Left</th><th>Past SLA</th></tr>${d.depts.map(x => `<tr><td>${esc(x.label)}</td><td>${x.claimed}/${x.total} <span class="meta">(${x.claimedRate}%)</span></td><td><b style="color:var(--ok)">${x.verified}/${x.total}</b> <span class="meta">(${x.verifiedRate}%)</span><div class="bar"><i style="width:${x.verifiedRate}%"></i></div></td><td>${Math.max(0, x.claimedRate - x.verifiedRate)} pts</td><td>${x.rejected}</td><td>${x.pending}</td><td>${x.overdue}</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>
   <div class="card"><h3>🧩 By issue type</h3>${d.cats.length ? `<table><tr><th>Type</th><th>Total</th><th>Resolved</th><th>Rate</th></tr>${d.cats.map(x => `<tr><td>${ICON[x.cat]} ${esc(x.label)}</td><td>${x.total}</td><td>${x.resolved}</td><td>${x.rate}%</td></tr>`).join('')}</table>` : '<div class="meta">No reports yet.</div>'}</div>`;
 }
 window.nav = nav;

@@ -13,6 +13,8 @@ const CIRCULATION_KM = 5;         // a report circulates only to people within t
 const CONFIRM_M = 500;            // upvotes from live-GPS users within 500 m count as "on-site confirmations"
 const FLAGS_TO_REMOVE = 3;        // distinct citizens flagging a post -> post removed + authority notified
 const STRIKES_TO_SUSPEND = 2;     // removed posts -> account suspended (24h x strikes)
+const VERIFY_MAX_M = 200;         // after-photo must be taken within 200 m of the reported spot
+const VERIFY_MIN_CONF = 0.6;      // AI confidence needed for a verified / not-fixed verdict
 const LEVEL_NAMES = ['National', 'State', 'District', 'Local'];
 const DEPTS = {
   roads: 'Roads & Bridges (PWD/NHAI)', water: 'Water Supply & Drainage', pollution: 'Pollution Control Board',
@@ -101,20 +103,29 @@ async function aiSeverity(r) {
   const j = await claudeJSON([...imgs, { type: 'text', text: `Civic issue report. Category: ${CATS[r.category].label}. Caption: ${r.caption}. Rate the visible severity 0-10 for public safety/inconvenience. Reply ONLY JSON: {"severity":0-10,"matches_category":true|false,"summary":"<=20 words"}` }]);
   if (j) { r.ai = { severity: Math.max(0, Math.min(10, +j.severity || 0)), matches: j.matches_category !== false, summary: String(j.summary || '').slice(0, 200) }; r.score = score(r); save(); }
 }
+// Returns { result: 'verified' | 'not_fixed' | 'inconclusive', by, confidence, reason, distanceM }.
+// A closure is VERIFIED only when the AI says "fixed" with enough confidence AND the after-photo was
+// taken near the reported spot. If the AI is unavailable or fails, the result is INCONCLUSIVE, never verified.
 async function verifyResolution(r, after, loc) {
-  // 1) cheap integrity checks (always run)
-  if (after.some(a => r.media.some(b => b.hash === a.hash))) return { resolved: false, by: 'integrity', reason: 'After-photo is identical to a "before" photo.' };
+  if (after.some(a => r.media.some(b => b.hash === a.hash))) return { result: 'not_fixed', by: 'integrity', confidence: 1, reason: 'After-photo is identical to a "before" photo.' };
   const d = km([loc.lat, loc.lng], r.lat != null ? [r.lat, r.lng] : null);
-  if (loc.lat != null && d != null && d * 1000 > CONFIRM_M * 2) return { resolved: false, by: 'integrity', reason: `After-photo was taken ${Math.round(d * 1000)} m from the reported spot.` };
-  // 2) AI vision comparison when available
+  const distanceM = d == null ? null : Math.round(d * 1000);
+  if (distanceM != null && distanceM > VERIFY_MAX_M) return { result: 'not_fixed', by: 'integrity', confidence: 1, distanceM, reason: `After-photo was taken ${distanceM} m from the reported spot (limit ${VERIFY_MAX_M} m).` };
+  const ai = await aiCompare(r, after);
+  if (!ai) return { result: 'inconclusive', by: 'none', confidence: 0, distanceM, reason: 'AI verification unavailable right now. Closure is recorded as CLAIMED, not verified.' };
+  const conf = Math.max(0, Math.min(1, +ai.confidence || 0));
+  const base = { by: 'ai', confidence: conf, distanceM, reason: ai.reason, evidence: ai.evidence || [], model: ai.model };
+  if (conf < VERIFY_MIN_CONF) return { ...base, result: 'inconclusive', reason: `AI not confident enough (${Math.round(conf * 100)}%): ${ai.reason}` };
+  if (!ai.fixed) return { ...base, result: 'not_fixed' };
+  if (distanceM == null) return { ...base, result: 'inconclusive', reason: `AI says fixed, but the after-photo location could not be confirmed (no GPS). ${ai.reason}` };
+  return { ...base, result: 'verified' };
+}
+async function aiCompare(r, after) {
   const b = imgBlocks(r.media, 2), a = imgBlocks(after, 2);
-  if (process.env.ANTHROPIC_API_KEY && b.length && a.length) {
-    const j = await claudeJSON([{ type: 'text', text: 'BEFORE photos:' }, ...b, { type: 'text', text: 'AFTER photos (submitted by authority):' }, ...a,
-      { type: 'text', text: `Issue: ${CATS[r.category].label} - ${r.caption}. Does the AFTER show the same place with the issue genuinely fixed? Be strict. Reply ONLY JSON: {"resolved":true|false,"confidence":0-1,"reason":"<=25 words"}` }]);
-    if (j) return { resolved: !!j.resolved && (+j.confidence || 0) >= 0.5, by: 'ai', confidence: +j.confidence || 0, reason: String(j.reason || '') };
-  }
-  // 3) fallback: provisional acceptance, finalised by community confirmation
-  return { resolved: true, by: 'heuristic', reason: 'Passed integrity checks (no AI key configured: provisional, community confirmation decides).' };
+  if (!process.env.ANTHROPIC_API_KEY || !b.length || !a.length) return null;
+  const j = await claudeJSON([{ type: 'text', text: 'BEFORE photos:' }, ...b, { type: 'text', text: 'AFTER photos (submitted by authority):' }, ...a,
+    { type: 'text', text: `Issue: ${CATS[r.category].label} - ${r.caption}. Does the AFTER show the same place with the issue genuinely fixed? Be strict. Reply ONLY JSON: {"resolved":true|false,"confidence":0-1,"reason":"<=25 words"}` }]);
+  return j ? { fixed: !!j.resolved, confidence: +j.confidence || 0, reason: String(j.reason || '') } : null;
 }
 
 // ---------- domain logic ----------
@@ -154,6 +165,7 @@ function view(r, uid) {
     author: anon(r.user, r.id), mine: r.user === uid, reporters: 1 + r.supporters.length, merged: r.supporters.length > 0,
     timeline: r.timeline, ai: r.ai || null, verdict: r.verdict || null, removed: !!r.removed,
     resolutionVotes: { ok: Object.values(r.resVotes || {}).filter(x => x).length, bad: Object.values(r.resVotes || {}).filter(x => !x).length },
+    claims: r.claims || 0, rejectedClaims: r.rejectedClaims || 0,
     myResVote: r.resVotes && r.resVotes[uid] !== undefined ? r.resVotes[uid] : null
   };
 }
@@ -196,7 +208,11 @@ function stats(list) {
   const rate = total ? resolved.length / total : 0;
   const overdueRatio = open.length ? overdue / open.length : 0;
   const speed = avgDays == null ? 0 : Math.max(0, 1 - avgDays / 14);
+  const claimed = list.filter(r => (r.claims || 0) > 0).length;
+  const verified = list.filter(r => r.status === 'resolved' && r.verdict && r.verdict.result === 'verified').length;
+  const rejected = list.reduce((a, r) => a + (r.rejectedClaims || 0), 0);
   return {
+    claimed, verified, rejected, claimedRate: total ? Math.round(100 * claimed / total) : 0, verifiedRate: total ? Math.round(100 * verified / total) : 0,
     total, resolved: resolved.length, pending: open.length, inProgress: list.filter(r => r.status === 'in_progress').length, overdue,
     critical: open.filter(r => sevLabel(r.score) === 'Critical').length, avgDays: avgDays == null ? null : +avgDays.toFixed(1),
     rate: Math.round(rate * 100), perf: total ? Math.round(100 * (0.5 * rate + 0.3 * (1 - overdueRatio) + 0.2 * speed)) : null
@@ -220,7 +236,7 @@ function dashboard(pre, depth) {
 const routes = [];
 const R = (m, re, fn) => routes.push([m, re, fn]);
 
-R('GET', /^\/api\/hierarchy$/, () => ({ tree, levels: LEVELS, cats: CATS, depts: DEPTS, levelNames: LEVEL_NAMES, config: { circulationKm: CIRCULATION_KM, confirmM: CONFIRM_M, flagsToRemove: FLAGS_TO_REMOVE }, ai: !!process.env.ANTHROPIC_API_KEY }));
+R('GET', /^\/api\/hierarchy$/, () => ({ verifyMaxM: VERIFY_MAX_M, tree, levels: LEVELS, cats: CATS, depts: DEPTS, levelNames: LEVEL_NAMES, config: { circulationKm: CIRCULATION_KM, confirmM: CONFIRM_M, flagsToRemove: FLAGS_TO_REMOVE }, ai: !!process.env.ANTHROPIC_API_KEY }));
 
 R('POST', /^\/api\/users$/, ({ body: b }) => {
   const role = b.role;
@@ -357,7 +373,7 @@ R('POST', /^\/api\/reports\/([\w-]+)\/flag$/, ({ m, body: b }) => {
 });
 R('POST', /^\/api\/reports\/([\w-]+)\/community-verify$/, ({ m, body: b }) => {
   const u = needUser(b.user, 'citizen'); notSuspended(u);
-  const r = db.reports[m[1]]; if (!r || r.status !== 'resolved') throw err(400, 'Not in resolved state');
+  const r = db.reports[m[1]]; if (!r || !['resolved', 'claimed'].includes(r.status)) throw err(400, 'Not in a resolved or claimed-fixed state');
   r.resVotes[u.id] = !!b.ok;
   const vs = Object.values(r.resVotes), bad = vs.filter(x => !x).length, ok = vs.length - bad;
   if (bad >= 3 && bad > ok) { r.status = 'reopened'; r.resolvedAt = null; addTL(r, `Reopened: ${bad} citizens say the issue is NOT fixed.`); notify(r.path, 'reopened', `Report ${r.id} reopened by community: resolution disputed by ${bad} citizens.`, { reportId: r.id }); }
@@ -377,8 +393,11 @@ R('POST', /^\/api\/reports\/([\w-]+)\/status$/, async ({ m, body: b }) => {
     const verdict = await verifyResolution(r, after, { lat: num(b.lat), lng: num(b.lng) });
     r.verdict = { ...verdict, t: now(), by_office: who };
     r.afterMedia = after; r.resVotes = {};
-    if (verdict.resolved) { r.status = 'resolved'; r.resolvedAt = now(); addTL(r, `${who} uploaded after-photo. ${verdict.by === 'ai' ? 'AI verified' : 'Auto-check passed'}: ${verdict.reason} Citizens can now confirm.`); }
-    else { if (r.status === 'open') r.status = 'in_progress'; addTL(r, `After-photo REJECTED (${verdict.by}): ${verdict.reason}`); }
+    r.claims = (r.claims || 0) + 1; r.claimedAt = now();
+    addTL(r, `${who} claimed the issue is fixed and uploaded an after-photo.${note ? ' ' + note : ''}`);
+    if (verdict.result === 'verified') { r.status = 'resolved'; r.resolvedAt = now(); addTL(r, `AI-VERIFIED fix (${Math.round(verdict.confidence * 100)}% confidence, ${verdict.distanceM} m from spot): ${verdict.reason} Citizens can still dispute.`); }
+    else if (verdict.result === 'not_fixed') { r.rejectedClaims = (r.rejectedClaims || 0) + 1; r.status = 'in_progress'; addTL(r, `Closure REJECTED (${verdict.by}): ${verdict.reason}`); }
+    else { r.status = 'claimed'; addTL(r, `Verification INCONCLUSIVE: ${verdict.reason}`); }
   } else throw err(400, 'Unknown action');
   recompute(r); save(); return view(r, u.id);
 });
